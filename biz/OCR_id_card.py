@@ -2,51 +2,92 @@ import cv2
 import numpy as np
 from cnocr import CnOcr
 
-def init_ocr(img_path,model_name='scene-densenet_lite_136-gru'):
-    '''
-    加载CnOcr的模型 默认加载的是 densenet_lite_136-gru 模型 中文识别模型
-    CnOCR V2.3 重新训练了所有的模型,模型较 V2.2.* 精度更高.V2.3 按使用场景把模型分为几大类场景:
-    scene:场景图片,适合识别一般拍照图片中的文字.此类模型以 scene- 开头,如模型 scene-densenet_lite_136-gru.
-    doc:文档图片,适合识别规则文档的截图图片,如书籍扫描件等.此类模型以 doc- 开头,如模型 doc-densenet_lite_136-gru.
-    number:仅识别纯数字(只能识别 0~9 十个数字)图片,适合银行卡号、身份证号等场景.此类模型以 number- 开头,如模型 number-densenet_lite_136-gru.
-    general: 通用场景,适合图片无明显倾向的一般图片.此类模型无特定开头,与旧版模型名称保持一致,如模型 densenet_lite_136-gru.
-    '''
-    ocr = CnOcr(model_name)
-    # show(image, "image")
+# 全局OCR实例
+_ocr_instance = None
 
+def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False):
+    '''
+    加载CnOcr的模型并处理身份证图像
+    
+    参数:
+    img_path: 图片路径
+    model_name: 使用的OCR模型名称
+    show_process: 是否显示处理过程中的图像
+    
+    返回:
+    识别结果字典
+    '''
+    global _ocr_instance
+    # 初始化OCR模型
+    if _ocr_instance is None:
+        _ocr_instance = CnOcr(model_name)
+    
     # 加载图片
     image = cv2.imread(img_path)
     if image is None:
         print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
-        return
-    # 1.灰度处理
-    gray = __gray_image(image)
-    # show(gray, "gray")
-    # 2.滤波
-    blur = __filter_gray(gray)
-    # show(blur, "blur")
-    # 3.二值化
-    binary = __binary_filter(blur)
-    # show(binary, "binary")
-    # 4.边缘检测并膨胀
-    dilation = __edge_binary(binary)
-    show(dilation, "dilation")
-    # 5.轮廓检测
-    contour = __find_contours(dilation)
-    if contour is None:
-        print("轮廓检测失败,无法继续处理.")
-        return
-    # res = cv2.drawContours(dilation, contour, -1, (0, 255, 0), 2)
-    # show(res, "contour")
-    # 6.透视变换
-    w, h, perspective = __perspective_image(image, contour)
-    if perspective is None:
-        print("透视变换失败,无法继续处理.")
-        return
-    show(perspective, "perspective")
-    # 7. 固定位置
-    resized = __fixed_perspective(w, h, perspective)
-    # show(resized, "resized")
+        return None
+        
+    try:
+        # 1.灰度处理
+        gray = __gray_image(image)
+        if show_process:
+            show(gray, "gray")
+            
+        # 2.滤波
+        blur = __filter_gray(gray)
+        if show_process:
+            show(blur, "blur")
+            
+        # 3.二值化
+        binary = __binary_filter(blur)
+        if show_process:
+            show(binary, "binary")
+            
+        # 4.边缘检测并膨胀
+        dilation = __edge_binary(binary)
+        if show_process:
+            show(dilation, "dilation")
+            
+        # 5.轮廓检测
+        contour = __find_contours(dilation)
+        if contour is None:
+            print("轮廓检测失败,无法继续处理.")
+            return None
+            
+        # 6.透视变换
+        w, h, perspective = __perspective_image(image, contour)
+        if perspective is None:
+            print("透视变换失败,无法继续处理.")
+            return None
+        if show_process:
+            show(perspective, "perspective")
+            
+        # 7. 固定位置
+        resized = __fixed_perspective(w, h, perspective)
+        if show_process:
+            show(resized, "resized")
+            
+        # 8. 检测文本位置并识别
+        contours, resize_copy = __check_id_card_text_location(resized)
+        if show_process:
+            show(resize_copy, "resize_copy")
+            
+        # 9. 提取文本区域并识别
+        gray = __gray_image(resized)
+        result, positions = __select_text(gray, contours, resize_copy, _ocr_instance, show_process)
+        
+        # 10. 将结果转换为字典格式
+        result_dict = {}
+        for item in result:
+            key, value = item.split(':', 1)
+            result_dict[key] = value
+            
+        return result_dict
+        
+    except Exception as e:
+        print(f"处理过程中发生错误: {str(e)}")
+        return None
 
     
 # 显示图片
@@ -231,54 +272,93 @@ def __check_id_card_text_location(resized):
     return contours, resize_copy
 
 
-def __select_text(gray, contours, resize_copy):
+def __select_text(gray, contours, resize_copy, ocr_instance, show_process=False):
     positions = []
     data_areas = {}
     for contour in contours:
         epsilon = 0.002 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
         x, y, w, h = cv2.boundingRect(approx)
-        if h > 50 and x < 670:
-            res = cv2.rectangle(resize_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        if h > 20 and w > 30 and x < 290:  # 调整参数以适应300x300的图像
+            cv2.rectangle(resize_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
             area = gray[y:(y + h), x:(x + w)]
             blur = cv2.medianBlur(area, 3)
             data_area = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
             positions.append((x, y))
             data_areas['{}-{}'.format(x, y)] = data_area
-    res, positions = sort_id_card_text_location(data_areas, positions)
+    res, positions = __sort_id_card_text_location(data_areas, positions, ocr_instance, show_process)
     return res, positions
 
 
-def __sort_id_card_text_location(data_areas, positions):
-    labels = ['姓名', '性别', '民族', '出生年', '出生月', '出生日', '住址', '公民身份号码', '签发机关', '有效期限']
+def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_process=False):
+    # 身份证正面信息标签
+    labels = ['姓名', '性别', '民族', '出生', '住址', '公民身份号码']
+    
+    # 按y坐标排序（从上到下）
     positions.sort(key=lambda p: p[1])
+    
+    # 处理同一行的多个文本区域
     result = []
     index = 0
     while index < len(positions) - 1:
-        if positions[index + 1][1] - positions[index][1] < 10:
-            temp_list = [positions[index + 1], positions[index]]
-            for i in range(index + 1, len(positions)):
-                if positions[i + 1][1] - positions[i][1] < 10:
-                    temp_list.append(positions[i + 1])
-                else:
-                    break
-            temp_list.sort(key=lambda p: p[0])
-            positions[index:(index + len(temp_list))] = temp_list
-            index = index + len(temp_list) - 1
+        # 如果两个区域的y坐标接近，认为它们在同一行
+        if index + 1 < len(positions) and abs(positions[index + 1][1] - positions[index][1]) < 10:
+            # 收集同一行的所有区域
+            same_row = [positions[index], positions[index + 1]]
+            i = index + 1
+            while i + 1 < len(positions) and abs(positions[i + 1][1] - positions[i][1]) < 10:
+                same_row.append(positions[i + 1])
+                i += 1
+            
+            # 按x坐标排序（从左到右）
+            same_row.sort(key=lambda p: p[0])
+            
+            # 更新positions列表
+            positions[index:index + len(same_row)] = same_row
+            index += len(same_row)
         else:
             index += 1
-    for index in range(len(positions)):
-        position = positions[index]
+    
+    # 识别每个区域的文本
+    recognized_results = []
+    for i, position in enumerate(positions):
+        if i >= len(labels):
+            break  # 防止超出标签数量
+            
         data_area = data_areas['{}-{}'.format(position[0], position[1])]
-        ocr_data = ocr.ocr(data_area)
-        ocr_result = ''.join([''.join(result[0]) for result in ocr_data]).replace(' ', '')
-        # print('{}:{}'.format(labels[index], ocr_result))
-        result.append('{}:{}'.format(labels[index], ocr_result))
-        show(data_area, "data_area")
-
-    for item in result:
+        
+        # 显示处理中的区域
+        if show_process:
+            show(data_area, f"区域_{i}_{labels[i]}")
+        
+        # OCR识别
+        try:
+            ocr_data = ocr_instance.ocr(data_area)
+            if ocr_data and len(ocr_data) > 0:
+                # 合并OCR结果
+                ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item]).replace(' ', '')
+                
+                # 处理特殊字段
+                if labels[i] == '出生':
+                    # 尝试提取年月日
+                    import re
+                    date_match = re.search(r'(\d{4})年?(\d{1,2})月?(\d{1,2})日?', ocr_result)
+                    if date_match:
+                        year, month, day = date_match.groups()
+                        ocr_result = f"{year}年{month}月{day}日"
+                
+                recognized_results.append(f"{labels[i]}:{ocr_result}")
+            else:
+                recognized_results.append(f"{labels[i]}:未识别")
+        except Exception as e:
+            print(f"识别区域 {labels[i]} 时出错: {str(e)}")
+            recognized_results.append(f"{labels[i]}:识别错误")
+    
+    # 输出识别结果
+    for item in recognized_results:
         print(item)
-    return result, positions
+        
+    return recognized_results, positions
 
 
 
