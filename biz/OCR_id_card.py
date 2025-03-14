@@ -222,10 +222,10 @@ def __fixed_perspective(w, h, perspective):
 # 检验身份证文本位置
 def __check_id_card_text_location(resized):
     # 对截取到得身份证重新 灰度、滤波、二值化...
-    gray = gray_image(resized)
-    blur = filter_gray(gray)
-    binary = binary_filter(blur)
-    dilation = edge_binary(binary)
+    gray = __gray_image(resized)
+    blur = __filter_gray(gray)
+    binary = __binary_filter(blur)
+    dilation = __edge_binary(binary)
     contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     resize_copy = resized.copy()
     return contours, resize_copy
