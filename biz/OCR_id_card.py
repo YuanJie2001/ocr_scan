@@ -1,11 +1,13 @@
 import cv2
 import numpy as np
 from cnocr import CnOcr
+from .id_validator import validate_id_card, extract_info_from_id_card
+import random
 
 # 全局OCR实例
 _ocr_instance = None
 
-def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False):
+def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
     '''
     加载CnOcr的模型并处理身份证图像
     
@@ -27,6 +29,10 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
     if image is None:
         print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
         return None
+        
+    # 如果需要转换为电子扫描件样式
+    if convert_to_scan:
+        image = convert_to_scan_style(image)
         
     try:
         # 1.灰度处理
@@ -82,6 +88,27 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
         for item in result:
             key, value = item.split(':', 1)
             result_dict[key] = value
+        
+        # 11. 验证身份证号码
+        if '公民身份号码' in result_dict and result_dict['公民身份号码'] != '未识别' and result_dict['公民身份号码'] != '识别错误':
+            id_number = result_dict['公民身份号码']
+            # 清理可能的空格和特殊字符
+            id_number = ''.join(c for c in id_number if c.isdigit() or c.upper() == 'X')
+            
+            # 验证身份证号码
+            is_valid, error_msg = validate_id_card(id_number)
+            result_dict['身份证号码验证'] = '有效' if is_valid else f'无效: {error_msg}'
+            
+            # 如果有效，提取更多信息
+            if is_valid:
+                extra_info = extract_info_from_id_card(id_number)
+                # 添加额外信息到结果中
+                for key, value in extra_info.items():
+                    if key not in result_dict:
+                        result_dict[key] = value
+            
+            # 更新身份证号码为清理后的值
+            result_dict['公民身份号码'] = id_number
             
         return result_dict
         
@@ -90,6 +117,88 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
         return None
 
     
+# 将图像转换为电子扫描件样式
+def convert_to_scan_style(image):
+    """
+    将图像转换为电子扫描件样式
+    
+    参数:
+    image: 输入图像
+    
+    返回:
+    转换后的图像
+    """
+    # 1. 调整亮度和对比度，模拟扫描效果
+    alpha = 1.3  # 对比度增强因子 - 增强对比度使文字更清晰
+    beta = 15    # 亮度增强因子 - 增加亮度使背景更白
+    adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
+    
+    # 2. 添加高斯模糊，模拟扫描时的模糊效果
+    blurred = cv2.GaussianBlur(adjusted, (5, 5), 0.8)
+    
+    # 3. 添加噪点，模拟扫描时的噪声
+    noise = np.zeros(blurred.shape, np.uint8)
+    cv2.randn(noise, 0, 15)  # 均值为0，标准差为15的高斯噪声
+    noisy = cv2.add(blurred, noise)
+    
+    # 4. 添加明显的纸张纹理效果
+    texture = np.zeros(noisy.shape, np.uint8)
+    for i in range(texture.shape[0]):
+        for j in range(texture.shape[1]):
+            # 创建更明显的纸张纹理
+            base_color = random.randint(235, 245)  # 降低基础颜色值，防止溢出
+            variation = random.randint(-8, 8)      # 减小变化范围
+            # 确保颜色值在0-255范围内
+            pixel_value = max(0, min(255, base_color + variation))
+            texture[i, j] = [pixel_value, pixel_value, pixel_value]
+    
+    # 5. 混合原图和纹理
+    beta = 0.15  # 增加纹理强度
+    scanned = cv2.addWeighted(noisy, 1 - beta, texture, beta, 0)
+    
+    # 5.1 添加轻微的颜色偏移，模拟扫描仪的色彩偏差
+    # 轻微增加蓝色通道，减少红色通道
+    b, g, r = cv2.split(scanned)
+    b = cv2.add(b, 5)
+    r = cv2.subtract(r, 5)
+    scanned = cv2.merge([b, g, r])
+    
+    # 6. 锐化处理，增强文字边缘
+    kernel = np.array([[-1, -1, -1],
+                       [-1, 10, -1],
+                       [-1, -1, -1]])
+    sharpened = cv2.filter2D(scanned, -1, kernel)
+    
+    # 7. 添加扫描线效果
+    height, width = sharpened.shape[:2]
+    scan_lines = np.zeros((height, width, 3), dtype=np.uint8)
+    
+    # 每隔一定像素添加一条轻微的扫描线
+    for i in range(0, height, 4):
+        if i + 1 < height:
+            scan_lines[i:i+1, :] = [0, 0, 0]
+    
+    # 将扫描线与图像混合
+    scan_alpha = 0.03  # 扫描线强度
+    result = cv2.addWeighted(sharpened, 1 - scan_alpha, scan_lines, scan_alpha, 0)
+    
+    # 8. 添加轻微的边缘暗角效果（Vignette）
+    # 创建径向渐变遮罩
+    mask = np.zeros((height, width), dtype=np.uint8)
+    center = (width // 2, height // 2)
+    radius = min(width, height) // 2
+    cv2.circle(mask, center, radius, 255, -1)
+    mask = cv2.GaussianBlur(mask, (height//5*2+1, width//5*2+1), 0)
+    
+    # 应用暗角效果
+    mask = mask.astype(np.float32) / 255.0
+    mask = np.expand_dims(mask, axis=2)
+    mask = np.repeat(mask, 3, axis=2)
+    vignette_alpha = 0.85  # 暗角强度
+    result = result * (mask * vignette_alpha + (1 - vignette_alpha))
+    
+    return result.astype(np.uint8)
+
 # 显示图片
 def show(image, window_name="default"):
     if image is None:
