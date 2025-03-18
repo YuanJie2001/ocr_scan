@@ -232,7 +232,7 @@ def __find_contours(dilation):
 def __perspective_image(image, contour):
     try:
         # 尝试不同的epsilon值来获取四边形
-        epsilon_values = [0.02, 0.03, 0.01, 0.04, 0.05, 0.06, 0.07, 0.08]
+        epsilon_values = [0.02, 0.03, 0.01, 0.04, 0.05]
         approx = None
         
         # 尝试不同的epsilon值
@@ -461,22 +461,8 @@ def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_proce
             if ocr_data is not None:
                 # 检查OCR结果的格式
                 if isinstance(ocr_data, list) and len(ocr_data) > 0:
-                    # 尝试不同的结果格式处理方式
-                    try:
-                        # 标准格式: [[['text'], confidence], ...]
-                        ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item and len(item) > 0]).replace(' ', '')
-                    except (IndexError, TypeError):
-                        try:
-                            # 备选格式1: [['text', confidence], ...]
-                            ocr_result = ''.join([item[0] for item in ocr_data if item and len(item) > 0]).replace(' ', '')
-                        except (IndexError, TypeError):
-                            try:
-                                # 备选格式2: ['text', ...]
-                                ocr_result = ''.join([item for item in ocr_data if item]).replace(' ', '')
-                            except (TypeError):
-                                # 如果以上都失败，尝试直接转换为字符串
-                                ocr_result = str(ocr_data).replace(' ', '')
-                    
+                    # 标准格式: [[['text'], confidence], ...]
+                    ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item and len(item) > 0]).replace(' ', '')
                     # 处理特殊字段
                     if labels[i] == '出生':
                         # 尝试提取年月日
@@ -496,12 +482,6 @@ def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_proce
                     
                     if ocr_result:
                         recognized_results.append(f"{labels[i]}:{ocr_result}")
-                    else:
-                        recognized_results.append(f"{labels[i]}:未识别")
-                else:
-                    recognized_results.append(f"{labels[i]}:未识别")
-            else:
-                recognized_results.append(f"{labels[i]}:未识别")
         except Exception as e:
             print(f"识别区域 {labels[i]} 时出错: {str(e)}")
             recognized_results.append(f"{labels[i]}:识别错误")

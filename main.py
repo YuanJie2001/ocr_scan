@@ -1,4 +1,4 @@
-from biz.OCR_id_card import init_ocr, show
+from biz import IDCardProcessor
 import os
 
 def process_id_card(image_path, show_process=False):
@@ -8,8 +8,11 @@ def process_id_card(image_path, show_process=False):
         print(f"错误: 文件 '{image_path}' 不存在")
         return
     
-    # 调用OCR识别
-    result = init_ocr(image_path, show_process=show_process)
+    # 创建身份证处理器实例
+    processor = IDCardProcessor()
+    
+    # 处理图像
+    result = processor.process_image(image_path, show_process)
     
     # 显示识别结果
     if result:
