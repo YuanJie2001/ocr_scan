@@ -120,7 +120,7 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
 # 将图像转换为电子扫描件样式
 def convert_to_scan_style(image):
     """
-    将图像转换为电子扫描件样式
+    将图像转换为电子扫描件样式，保持原图的彩色信息
     
     参数:
     image: 输入图像
@@ -128,61 +128,39 @@ def convert_to_scan_style(image):
     返回:
     转换后的图像
     """
-    # 1. 调整亮度和对比度，模拟扫描效果
-    alpha = 1.3  # 对比度增强因子 - 增强对比度使文字更清晰
-    beta = 15    # 亮度增强因子 - 增加亮度使背景更白
+    # 1. 调整亮度和对比度，增强色彩鲜艳度
+    alpha = 1.2  # 对比度增强因子 - 适度增强对比度
+    beta = 10    # 亮度增强因子 - 适度增加亮度
     adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
     
-    # 2. 添加高斯模糊，模拟扫描时的模糊效果
-    blurred = cv2.GaussianBlur(adjusted, (5, 5), 0.8)
+    # 2. 添加轻微高斯模糊，模拟扫描时的轻微模糊效果
+    blurred = cv2.GaussianBlur(adjusted, (3, 3), 0.5)  # 减小模糊程度
     
-    # 3. 添加噪点，模拟扫描时的噪声
+    # 3. 添加轻微噪点，模拟扫描时的噪声
     noise = np.zeros(blurred.shape, np.uint8)
-    cv2.randn(noise, 0, 15)  # 均值为0，标准差为15的高斯噪声
+    cv2.randn(noise, 0, 8)  # 减小噪声强度
     noisy = cv2.add(blurred, noise)
     
-    # 4. 添加明显的纸张纹理效果
-    texture = np.zeros(noisy.shape, np.uint8)
-    for i in range(texture.shape[0]):
-        for j in range(texture.shape[1]):
-            # 创建更明显的纸张纹理
-            base_color = random.randint(235, 245)  # 降低基础颜色值，防止溢出
-            variation = random.randint(-8, 8)      # 减小变化范围
-            # 确保颜色值在0-255范围内
-            pixel_value = max(0, min(255, base_color + variation))
-            texture[i, j] = [pixel_value, pixel_value, pixel_value]
+    # 4. 锐化处理，增强文字边缘和色彩
+    kernel = np.array([[-0.5, -0.5, -0.5],
+                       [-0.5, 7, -0.5],
+                       [-0.5, -0.5, -0.5]])  # 减小锐化强度
+    sharpened = cv2.filter2D(noisy, -1, kernel)
     
-    # 5. 混合原图和纹理
-    beta = 0.15  # 增加纹理强度
-    scanned = cv2.addWeighted(noisy, 1 - beta, texture, beta, 0)
-    
-    # 5.1 添加轻微的颜色偏移，模拟扫描仪的色彩偏差
-    # 轻微增加蓝色通道，减少红色通道
-    b, g, r = cv2.split(scanned)
-    b = cv2.add(b, 5)
-    r = cv2.subtract(r, 5)
-    scanned = cv2.merge([b, g, r])
-    
-    # 6. 锐化处理，增强文字边缘
-    kernel = np.array([[-1, -1, -1],
-                       [-1, 10, -1],
-                       [-1, -1, -1]])
-    sharpened = cv2.filter2D(scanned, -1, kernel)
-    
-    # 7. 添加扫描线效果
+    # 5. 添加轻微的扫描线效果
     height, width = sharpened.shape[:2]
     scan_lines = np.zeros((height, width, 3), dtype=np.uint8)
     
-    # 每隔一定像素添加一条轻微的扫描线
-    for i in range(0, height, 4):
+    # 每隔更多像素添加一条非常轻微的扫描线
+    for i in range(0, height, 8):  # 增加间隔，减少扫描线
         if i + 1 < height:
             scan_lines[i:i+1, :] = [0, 0, 0]
     
-    # 将扫描线与图像混合
-    scan_alpha = 0.03  # 扫描线强度
+    # 将扫描线与图像混合，减小扫描线强度
+    scan_alpha = 0.01  # 减小扫描线强度
     result = cv2.addWeighted(sharpened, 1 - scan_alpha, scan_lines, scan_alpha, 0)
     
-    # 8. 添加轻微的边缘暗角效果（Vignette）
+    # 6. 添加非常轻微的边缘暗角效果（Vignette）
     # 创建径向渐变遮罩
     mask = np.zeros((height, width), dtype=np.uint8)
     center = (width // 2, height // 2)
@@ -190,12 +168,22 @@ def convert_to_scan_style(image):
     cv2.circle(mask, center, radius, 255, -1)
     mask = cv2.GaussianBlur(mask, (height//5*2+1, width//5*2+1), 0)
     
-    # 应用暗角效果
+    # 应用暗角效果，减小暗角强度
     mask = mask.astype(np.float32) / 255.0
     mask = np.expand_dims(mask, axis=2)
     mask = np.repeat(mask, 3, axis=2)
-    vignette_alpha = 0.85  # 暗角强度
+    vignette_alpha = 0.95  # 增大该值，减小暗角强度
     result = result * (mask * vignette_alpha + (1 - vignette_alpha))
+    
+    # 7. 增强色彩饱和度
+    hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    # 增加饱和度
+    s = cv2.multiply(s, 1.2)  # 增加饱和度
+    # 合并通道
+    hsv = cv2.merge([h, s, v])
+    # 转回BGR
+    result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     
     return result.astype(np.uint8)
 
