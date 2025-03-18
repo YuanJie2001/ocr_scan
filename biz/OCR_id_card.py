@@ -5,7 +5,7 @@ from cnocr import CnOcr
 # 全局OCR实例
 _ocr_instance = None
 
-def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False):
+def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False, retry=3):
     '''
     加载CnOcr的模型并处理身份证图像
     
@@ -13,19 +13,36 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
     img_path: 图片路径
     model_name: 使用的OCR模型名称
     show_process: 是否显示处理过程中的图像
+    retry: 初始化重试次数
     
     返回:
     识别结果字典
     '''
     global _ocr_instance
-    # 初始化OCR模型
-    if _ocr_instance is None:
-        _ocr_instance = CnOcr(model_name)
+    # 带重试机制的初始化
+    for attempt in range(retry):
+        try:
+            if _ocr_instance is None:
+                print(f"正在初始化OCR模型({attempt+1}/{retry}): {model_name}...")
+                _ocr_instance = CnOcr(model_name)
+                print("OCR模型初始化完成")
+        except Exception as e:
+            if attempt < retry - 1:
+                print(f"OCR初始化失败，正在重试 ({attempt+1}/{retry}): {str(e)}")
+                continue
+            else:
+                print(f"OCR模型初始化最终失败: {str(e)}")
+                return None
     
     # 加载图片
-    image = cv2.imread(img_path)
-    if image is None:
-        print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
+    try:
+        image = cv2.imread(img_path)
+        if image is None:
+            print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
+            return None
+        print(f"成功加载图片: {img_path}, 尺寸: {image.shape}")
+    except Exception as e:
+        print(f"加载图片时出错: {str(e)}")
         return None
         
     try:
@@ -56,12 +73,16 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
             return None
             
         # 6.透视变换
-        w, h, perspective = __perspective_image(image, contour)
-        if perspective is None:
-            print("透视变换失败,无法继续处理.")
+        try:
+            w, h, perspective = __perspective_image(image, contour)
+            if perspective is None:
+                print("透视变换失败,无法继续处理.")
+                return None
+            if show_process:
+                show(perspective, "perspective")
+        except Exception as e:
+            print(f"透视变换过程中发生错误: {str(e)}")
             return None
-        if show_process:
-            show(perspective, "perspective")
             
         # 7. 固定位置
         resized = __fixed_perspective(w, h, perspective)
@@ -165,11 +186,11 @@ def __binary_filter(blur):
 # 边缘检测和膨胀处理
 def __edge_binary(binary):
     """
-    threshold1(50):
+    threshold1(30):
     第一阈值(低阈值).
     用于确定像素梯度的最小值.如果梯度值小于 threshold1,这些像素将被认为不是边缘.
 
-    threshold2(150):
+    threshold2(100):
     第二阈值(高阈值).
     用于确定像素梯度的最大值.如果梯度值大于 threshold2,这些像素被认为是强边缘.
 
@@ -186,11 +207,12 @@ def __edge_binary(binary):
     True:使用公式 根号下 (G上底2下底X + G上底2下底Y)
     False: |G下底Z|+|G下底Y|
     """
-    edges = cv2.Canny(binary, 50, 150, 3, L2gradient=True)
+    # 降低阈值以检测更多边缘
+    edges = cv2.Canny(binary, 30, 100, 3, L2gradient=True)
     # 创建一个 3x3 的结构元素
     kernel = np.ones((3, 3), np.uint8)
-    # 膨胀操作
-    dilation = cv2.dilate(edges, kernel, iterations=5)
+    # 增加膨胀迭代次数，使轮廓更连续
+    dilation = cv2.dilate(edges, kernel, iterations=7)
     return dilation
 
 
@@ -208,49 +230,83 @@ def __find_contours(dilation):
 
 # 透视变换
 def __perspective_image(image, contour):
-    # 使用 epsilon 来近似多边形
-    epsilon = 0.02 * cv2.arcLength(contour, True)
-    approx = cv2.approxPolyDP(contour, epsilon, True)
+    try:
+        # 尝试不同的epsilon值来获取四边形
+        epsilon_values = [0.02, 0.03, 0.01, 0.04, 0.05, 0.06, 0.07, 0.08]
+        approx = None
+        
+        # 尝试不同的epsilon值
+        for epsilon_factor in epsilon_values:
+            epsilon = epsilon_factor * cv2.arcLength(contour, True)
+            current_approx = cv2.approxPolyDP(contour, epsilon, True)
+            
+            # 如果找到四边形，使用它
+            if len(current_approx) == 4:
+                approx = current_approx
+                print(f"找到四边形轮廓，使用epsilon值: {epsilon_factor}")
+                break
+        
+        # 如果没有找到四边形，使用最小外接矩形
+        if approx is None or len(approx) != 4:
+            print(f"警告: 未能找到四边形轮廓，使用最小外接矩形作为备选方案")
+            # 使用最小外接矩形作为备选方案
+            rect = cv2.minAreaRect(contour)
+            box = cv2.boxPoints(rect)
+            approx = np.int32(box)
+            
+        # 将点整理成二维数组
+        points = approx.reshape(4, 2)
 
-    # 如果近似多边形是四边形
-    if len(approx) != 4:
-        raise ValueError("轮廓不是四边形")
-    # 将点整理成二维数组
-    points = approx.reshape(4, 2)
+        # 对点按左上、右上、右下、左下顺序排序
+        rect = np.zeros((4, 2), dtype="float32")
+        s = points.sum(axis=1)
+        rect[0] = points[np.argmin(s)]  # 左上
+        rect[2] = points[np.argmax(s)]  # 右下
 
-    # 对点按左上、右上、右下、左下顺序排序
-    rect = np.zeros((4, 2), dtype="float32")
-    s = points.sum(axis=1)
-    rect[0] = points[np.argmin(s)]  # 左上
-    rect[2] = points[np.argmax(s)]  # 右下
+        diff = np.diff(points, axis=1)
+        rect[1] = points[np.argmin(diff)]  # 右上
+        rect[3] = points[np.argmax(diff)]  # 左下
 
-    diff = np.diff(points, axis=1)
-    rect[1] = points[np.argmin(diff)]  # 右上
-    rect[3] = points[np.argmax(diff)]  # 左下
+        # 计算宽度和高度
+        (tl, tr, br, bl) = rect
+        width_a = np.linalg.norm(br - bl)
+        width_b = np.linalg.norm(tr - tl)
+        max_width = max(int(width_a), int(width_b))
 
-    # 计算宽度和高度
-    (tl, tr, br, bl) = rect
-    width_a = np.linalg.norm(br - bl)
-    width_b = np.linalg.norm(tr - tl)
-    max_width = max(int(width_a), int(width_b))
+        height_a = np.linalg.norm(tr - br)
+        height_b = np.linalg.norm(tl - bl)
+        max_height = max(int(height_a), int(height_b))
+        
+        # 检查尺寸是否合理
+        if max_width < 10 or max_height < 10:
+            raise ValueError(f"透视变换后的尺寸过小: {max_width}x{max_height}")
+        
+        if max_width > 5000 or max_height > 5000:
+            raise ValueError(f"透视变换后的尺寸过大: {max_width}x{max_height}")
 
-    height_a = np.linalg.norm(tr - br)
-    height_b = np.linalg.norm(tl - bl)
-    max_height = max(int(height_a), int(height_b))
+        # 目标变换后的点
+        dst = np.array([
+            [0, 0],
+            [max_width - 1, 0],
+            [max_width - 1, max_height - 1],
+            [0, max_height - 1]
+        ], dtype="float32")
 
-    # 目标变换后的点
-    dst = np.array([
-        [0, 0],
-        [max_width - 1, 0],
-        [max_width - 1, max_height - 1],
-        [0, max_height - 1]
-    ], dtype="float32")
-
-    # 计算透视变换矩阵
-    M = cv2.getPerspectiveTransform(rect, dst)
-    # 执行透视变换
-    warped = cv2.warpPerspective(image, M, (max_width, max_height))
-    return max_width, max_height, warped
+        # 计算透视变换矩阵
+        M = cv2.getPerspectiveTransform(rect, dst)
+        # 执行透视变换
+        warped = cv2.warpPerspective(image, M, (max_width, max_height))
+        return max_width, max_height, warped
+    except Exception as e:
+        print(f"透视变换失败: {str(e)}")
+        # 如果透视变换失败，尝试使用原始图像作为备选方案
+        try:
+            h, w = image.shape[:2]
+            print(f"使用原始图像作为备选方案，尺寸: {w}x{h}")
+            return w, h, image
+        except Exception as backup_error:
+            print(f"备选方案也失败: {str(backup_error)}")
+            return None, None, None
 
 # 固定图像
 def __fixed_perspective(w, h, perspective):
@@ -275,17 +331,76 @@ def __check_id_card_text_location(resized):
 def __select_text(gray, contours, resize_copy, ocr_instance, show_process=False):
     positions = []
     data_areas = {}
-    for contour in contours:
-        epsilon = 0.002 * cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, epsilon, True)
-        x, y, w, h = cv2.boundingRect(approx)
-        if h > 20 and w > 30 and x < 290:  # 调整参数以适应300x300的图像
-            cv2.rectangle(resize_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            area = gray[y:(y + h), x:(x + w)]
-            blur = cv2.medianBlur(area, 3)
-            data_area = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-            positions.append((x, y))
-            data_areas['{}-{}'.format(x, y)] = data_area
+    
+    # 按面积降序排序轮廓，优先处理较大的文本区域
+    sorted_contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    
+    # 限制处理的轮廓数量，避免处理太多噪点
+    max_contours = min(30, len(sorted_contours))
+    
+    for i, contour in enumerate(sorted_contours[:max_contours]):
+        try:
+            # 使用自适应epsilon值，根据轮廓长度调整
+            perimeter = cv2.arcLength(contour, True)
+            epsilon = 0.002 * perimeter
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            x, y, w, h = cv2.boundingRect(approx)
+            
+            # 计算宽高比，用于过滤不合理的文本区域
+            aspect_ratio = float(w) / h if h > 0 else 0
+            
+            # 优化文本区域筛选条件
+            # 1. 基本尺寸要求
+            # 2. 位置限制（在图像范围内）
+            # 3. 宽高比限制（避免过于狭长或过于方形的区域）
+            if (h > 12 and w > 20 and  # 尺寸要求
+                x < 290 and y < 290 and  # 位置限制
+                0.5 < aspect_ratio < 15 and  # 宽高比限制
+                w * h > 400):  # 面积限制
+                
+                # 在图像上标记检测到的文本区域
+                cv2.rectangle(resize_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(resize_copy, f"{i}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                
+                # 扩大文本区域边界，确保完整捕获文字
+                margin = 3  # 增加边界扩展量
+                y_start = max(0, y - margin)
+                y_end = min(gray.shape[0], y + h + margin)
+                x_start = max(0, x - margin)
+                x_end = min(gray.shape[1], x + w + margin)
+                
+                # 提取文本区域
+                area = gray[y_start:y_end, x_start:x_end]
+                
+                # 检查区域是否为空
+                if area.size == 0:
+                    print(f"警告: 区域 {i} 为空，跳过处理")
+                    continue
+                
+                # 图像增强处理
+                # 1. 自适应直方图均衡化，提高对比度
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                enhanced = clahe.apply(area)
+                
+                # 2. 中值滤波去噪，保留文字边缘
+                blur = cv2.medianBlur(enhanced, 3)
+                
+                # 3. 使用OTSU自适应阈值进行二值化
+                data_area = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+                
+                # 4. 形态学操作，连接断开的文字
+                kernel = np.ones((2,2), np.uint8)
+                data_area = cv2.morphologyEx(data_area, cv2.MORPH_CLOSE, kernel)
+                
+                # 保存处理结果
+                positions.append((x, y))
+                data_areas['{}-{}'.format(x, y)] = data_area
+                
+                if show_process:
+                    print(f"处理文本区域 {i}: 位置({x},{y}), 尺寸({w}x{h}), 宽高比({aspect_ratio:.2f})")
+        except Exception as e:
+            print(f"处理轮廓 {i} 时出错: {str(e)}")
+            continue
     res, positions = __sort_id_card_text_location(data_areas, positions, ocr_instance, show_process)
     return res, positions
 
@@ -294,11 +409,14 @@ def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_proce
     # 身份证正面信息标签
     labels = ['姓名', '性别', '民族', '出生', '住址', '公民身份号码']
     
-    # 按y坐标排序（从上到下）
-    positions.sort(key=lambda p: p[1])
+    # 增强版区域排序：先垂直后水平，结合身份证标准布局
+    positions.sort(key=lambda p: (p[1]//50, p[0]))  # 50像素为一个垂直区间
+    
+    # 基于身份证标准布局过滤无效区域
+    valid_positions = [p for p in positions if 50 < p[0] < 400 and 50 < p[1] < 300]
+    positions = valid_positions[:6]  # 只保留前6个有效区域
     
     # 处理同一行的多个文本区域
-    result = []
     index = 0
     while index < len(positions) - 1:
         # 如果两个区域的y坐标接近，认为它们在同一行
@@ -333,21 +451,55 @@ def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_proce
         
         # OCR识别
         try:
+            # 检查data_area是否为有效的图像数据
+            if data_area is None or data_area.size == 0:
+                raise ValueError("无效的图像数据")
+                
             ocr_data = ocr_instance.ocr(data_area)
-            if ocr_data and len(ocr_data) > 0:
-                # 合并OCR结果
-                ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item]).replace(' ', '')
-                
-                # 处理特殊字段
-                if labels[i] == '出生':
-                    # 尝试提取年月日
-                    import re
-                    date_match = re.search(r'(\d{4})年?(\d{1,2})月?(\d{1,2})日?', ocr_result)
+            
+            # 增强对OCR结果的处理逻辑
+            if ocr_data is not None:
+                # 检查OCR结果的格式
+                if isinstance(ocr_data, list) and len(ocr_data) > 0:
+                    # 尝试不同的结果格式处理方式
+                    try:
+                        # 标准格式: [[['text'], confidence], ...]
+                        ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item and len(item) > 0]).replace(' ', '')
+                    except (IndexError, TypeError):
+                        try:
+                            # 备选格式1: [['text', confidence], ...]
+                            ocr_result = ''.join([item[0] for item in ocr_data if item and len(item) > 0]).replace(' ', '')
+                        except (IndexError, TypeError):
+                            try:
+                                # 备选格式2: ['text', ...]
+                                ocr_result = ''.join([item for item in ocr_data if item]).replace(' ', '')
+                            except (TypeError):
+                                # 如果以上都失败，尝试直接转换为字符串
+                                ocr_result = str(ocr_data).replace(' ', '')
+                    
+                    # 处理特殊字段
+                    if labels[i] == '出生':
+                        # 尝试提取年月日
+                        import re
+                        # 增强日期格式校验
+                    date_match = re.search(r'(19|20)\d{2}[年\\-]\d{1,2}[月\\-]\d{1,2}', ocr_result)
                     if date_match:
-                        year, month, day = date_match.groups()
-                        ocr_result = f"{year}年{month}月{day}日"
-                
-                recognized_results.append(f"{labels[i]}:{ocr_result}")
+                        clean_date = re.sub(r'[^0-9]', '-', date_match.group())
+                        year, month, day = clean_date.split('-')
+                        ocr_result = f"{year}年{month.zfill(2)}月{day.zfill(2)}日"
+                    
+                    # 身份证号码校验
+                    if labels[i] == '公民身份号码':
+                        id_match = re.search(r'\d{17}[\dXx]', ocr_result)
+                        if id_match:
+                            ocr_result = id_match.group().upper()
+                    
+                    if ocr_result:
+                        recognized_results.append(f"{labels[i]}:{ocr_result}")
+                    else:
+                        recognized_results.append(f"{labels[i]}:未识别")
+                else:
+                    recognized_results.append(f"{labels[i]}:未识别")
             else:
                 recognized_results.append(f"{labels[i]}:未识别")
         except Exception as e:
