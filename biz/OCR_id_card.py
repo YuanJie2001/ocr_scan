@@ -29,9 +29,6 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
         print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
         return None
         
-    # 如果需要转换为电子扫描件样式
-    if convert_to_scan:
-        convert_to_scan_style(image,out_path)
     try:
         # 1.灰度处理
         gray = __gray_image(image)
@@ -43,8 +40,14 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
         if show_process:
             show(blur, "blur")
             
+        # CLAHE对比度增强
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(blur)
+        if show_process:
+            show(enhanced, "enhanced")
+
         # 3.二值化
-        binary = __binary_filter(blur)
+        binary = __binary_filter(enhanced)
         if show_process:
             show(binary, "binary")
             
@@ -71,7 +74,9 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
         resized = __fixed_perspective(w, h, perspective)
         if show_process:
             show(resized, "resized")
-            
+            # 如果需要转换为电子扫描件样式
+        if convert_to_scan:
+            convert_to_scan_style(image,out_path) 
         # 8. 检测文本位置并识别
         contours, resize_copy = __check_id_card_text_location(resized)
         if show_process:
@@ -186,8 +191,6 @@ def convert_to_scan_style(image, out_path):
     print("\n保存扫描样式图像...")
     # 保存图像
     result = cv2.imwrite(out_path, scanned)
-    cv2.imwrite(image_png_path, scanned)
-    
     show(scanned, "scanned")
     if result:
         print(f"扫描样式图像已保存到: {out_path}")
@@ -227,7 +230,7 @@ def __filter_gray(gray):
     测试发现双边滤波对椒盐噪声的去除不好.因此混用中值滤波和双边滤波
     '''
     median = cv2.medianBlur(gray, ksize=5)
-    blur = cv2.bilateralFilter(median, d=9, sigmaColor=75, sigmaSpace=75)
+    bilateral = cv2.bilateralFilter(median, d=9, sigmaColor=75, sigmaSpace=75)
     '''
     image: 输入图像(一般是灰度图像)
     (5, 5):高斯核的大小,表示高斯模糊窗口的宽度和高度(必须为奇数,例如 (3, 3) 或 (5, 5)).
@@ -236,8 +239,9 @@ def __filter_gray(gray):
      若设置为 0,则 OpenCV 会根据高斯核的大小自动计算一个适合的值.
      如果手动设置,较大的标准差会导致更强的模糊效果.
     '''
-    # 高斯模糊 cv2.GaussianBlur(image, (5, 5), 0)
-    return blur
+    # 高斯模糊 
+    gaussian = cv2.GaussianBlur(bilateral, (3, 3), 0)
+    return gaussian
 
 
 # 二值化
@@ -292,7 +296,7 @@ def __edge_binary(binary):
     True:使用公式 根号下 (G上底2下底X + G上底2下底Y)
     False: |G下底Z|+|G下底Y|
     """
-    edges = cv2.Canny(binary, 50, 150, 3, L2gradient=True)
+    edges = cv2.Canny(binary, 50, 150, 5, L2gradient=True)
     # 创建一个 3x3 的结构元素
     kernel = np.ones((3, 3), np.uint8)
     # 膨胀操作
