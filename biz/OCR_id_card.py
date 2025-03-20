@@ -8,7 +8,7 @@ _ocr_instance = None
 
 def init_ocr(img_path, out_path=None, model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
     '''
-    加载CnOcr的模型并处理身份证图像
+    加载CnOcr的模型并处理身份证图像OCR_id_card
     
     参数:
     img_path: 图片路径
