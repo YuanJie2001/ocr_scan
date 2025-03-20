@@ -109,40 +109,40 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
             result_dict['公民身份号码'] = id_number
                 # 显示识别结果
         return result_dict
-        
     except Exception as e:
         print(f"处理过程中发生错误: {str(e)}")
         return None
 
     
 # 将图像转换为电子扫描件样式
-def convert_to_scan_style(image,out_path):
+def convert_to_scan_style(image, out_path):
     """
     将图像转换为电子扫描件样式，保持原图的彩色信息
     
     参数:
     image: 输入图像
+    out_path: 输出图像路径
     
     返回:
     转换后的图像
     """
-    # 1. 调整亮度和对比度，增强色彩鲜艳度
-    alpha = 1.2  # 对比度增强因子 - 适度增强对比度
-    beta = 10    # 亮度增强因子 - 适度增加亮度
+    # 1. 调整亮度和对比度，适度增强
+    alpha = 1.1  # 降低对比度增强因子
+    beta = 2     # 降低亮度增强因子
     adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
     
     # 2. 添加轻微高斯模糊，模拟扫描时的轻微模糊效果
-    blurred = cv2.GaussianBlur(adjusted, (3, 3), 0.5)  # 减小模糊程度
+    blurred = cv2.GaussianBlur(adjusted, (3, 3), 0.5)
     
     # 3. 添加轻微噪点，模拟扫描时的噪声
     noise = np.zeros(blurred.shape, np.uint8)
-    cv2.randn(noise, 0, 8)  # 减小噪声强度
+    cv2.randn(noise, 0, 5)  # 减小噪声强度
     noisy = cv2.add(blurred, noise)
     
     # 4. 锐化处理，增强文字边缘和色彩
-    kernel = np.array([[-0.5, -0.5, -0.5],
-                       [-0.5, 7, -0.5],
-                       [-0.5, -0.5, -0.5]])  # 减小锐化强度
+    kernel = np.array([[-0.3, -0.3, -0.3],
+                       [-0.3, 5, -0.3],
+                       [-0.3, -0.3, -0.3]])  # 减小锐化强度
     sharpened = cv2.filter2D(noisy, -1, kernel)
     
     # 5. 添加轻微的扫描线效果
@@ -150,19 +150,18 @@ def convert_to_scan_style(image,out_path):
     scan_lines = np.zeros((height, width, 3), dtype=np.uint8)
     
     # 每隔更多像素添加一条非常轻微的扫描线
-    for i in range(0, height, 8):  # 增加间隔，减少扫描线
+    for i in range(0, height, 12):  # 增加间隔，减少扫描线
         if i + 1 < height:
             scan_lines[i:i+1, :] = [0, 0, 0]
     
     # 将扫描线与图像混合，减小扫描线强度
-    scan_alpha = 0.01  # 减小扫描线强度
+    scan_alpha = 0.005  # 减小扫描线强度
     result = cv2.addWeighted(sharpened, 1 - scan_alpha, scan_lines, scan_alpha, 0)
     
     # 6. 添加非常轻微的边缘暗角效果（Vignette）
-    # 创建径向渐变遮罩
     mask = np.zeros((height, width), dtype=np.uint8)
     center = (width // 2, height // 2)
-    radius = min(width, height) // 2
+    radius = int(min(width, height) // 1.5)  # 增大半径，减小暗角效果
     cv2.circle(mask, center, radius, 255, -1)
     mask = cv2.GaussianBlur(mask, (height//5*2+1, width//5*2+1), 0)
     
@@ -170,28 +169,32 @@ def convert_to_scan_style(image,out_path):
     mask = mask.astype(np.float32) / 255.0
     mask = np.expand_dims(mask, axis=2)
     mask = np.repeat(mask, 3, axis=2)
-    vignette_alpha = 0.95  # 增大该值，减小暗角强度
+    vignette_alpha = 0.97  # 增大该值，减小暗角强度
     result = result * (mask * vignette_alpha + (1 - vignette_alpha))
     
-    # 7. 增强色彩饱和度
+    # 7. 增强色彩饱和度，但不要过度
     hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    # 增加饱和度
-    s = cv2.multiply(s, 1.2)  # 增加饱和度
+    # 适度增加饱和度
+    s = cv2.multiply(s, 1.1)
     # 合并通道
     hsv = cv2.merge([h, s, v])
     # 转回BGR
     bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     
-    scanned =  bgr.astype(np.uint8)
+    scanned = bgr.astype(np.uint8)
     print("\n保存扫描样式图像...")
-        # 保存图像
+    # 保存图像
     result = cv2.imwrite(out_path, scanned)
+    cv2.imwrite(image_png_path, scanned)
+    
     show(scanned, "scanned")
     if result:
         print(f"扫描样式图像已保存到: {out_path}")
     else:
         print(f"保存图像失败: {out_path}")
+    
+    return scanned
 
 # 显示图片
 def show(image, window_name="default"):
@@ -317,7 +320,8 @@ def __perspective_image(image, contour):
 
     # 如果近似多边形是四边形
     if len(approx) != 4:
-        raise ValueError("轮廓不是四边形")
+        print(f"警告: 轮廓不是四边形 (检测到 {len(approx)} 个顶点)")
+        return None, None, None
     # 将点整理成二维数组
     points = approx.reshape(4, 2)
 
@@ -375,17 +379,49 @@ def __check_id_card_text_location(resized):
     return contours, resize_copy
 
 
-def __select_text(ocr_instance):
-    res = __sort_id_card_text_location(ocr_instance)
-    print(res)
-    return res
-
-
-def __sort_id_card_text_location(ocr_instance):
+def __select_text(gray):
+    """
+    对灰度图像进行OCR识别
+    
+    参数:
+    gray: 灰度图像
+    
+    返回:
+    识别结果和位置信息
+    """
+    result = []
+    positions = []
+    
+    # 使用全局OCR实例进行识别
+    ocr_result = _ocr_instance.ocr(gray)
+    
     # 身份证正面信息标签
     labels = ['姓名', '性别', '民族', '出生', '住址', '公民身份号码']
-    out = _ocr_instance.ocr(img_path)
-    return out
-
-
+    
+    # 处理OCR结果
+    if ocr_result:
+        for item in ocr_result:
+            text = item['text']
+            position = item['position']
+            
+            # 检查是否包含标签
+            for label in labels:
+                if label in text:
+                    # 提取标签后的内容
+                    value = text.split(label, 1)[1].strip()
+                    if value:
+                        result.append(f"{label}:{value}")
+                    else:
+                        result.append(f"{label}:未识别")
+                    positions.append(position)
+                    break
+    
+    # 确保所有标签都有结果
+    existing_labels = [item.split(':', 1)[0] for item in result]
+    for label in labels:
+        if label not in existing_labels:
+            result.append(f"{label}:未识别")
+            positions.append(None)
+    
+    return result, positions
 

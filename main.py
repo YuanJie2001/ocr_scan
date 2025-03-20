@@ -3,8 +3,6 @@ import os
 import cv2
 
 
-
-
 if __name__ == '__main__':
     # 3. 处理正面 (转换为扫描样式)
     print("\n处理身份证国徽面 (扫描样式)...")
@@ -14,9 +12,9 @@ if __name__ == '__main__':
     if result:
         print("\n身份证识别结果:")
         print("-" * 30)
-    for key, value in result.items():
-        print(f"{key}: {value}")
-        print("-" * 30)
+        for key, value in result.items():
+            print(f"{key}: {value}")
+            print("-" * 30)
     else:
-        print("识别失败，未能获取有效结果")  
+        print("识别失败，未能获取有效结果")
     
