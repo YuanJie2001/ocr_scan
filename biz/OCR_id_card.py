@@ -24,13 +24,11 @@ def init_ocr(img_path, out_path=None, model_name='scene-densenet_lite_136-gru', 
     # 初始化OCR模型
     if _ocr_instance is None:
         _ocr_instance = CnOcr(model_name)
-    
     # 加载图片
     image = cv2.imread(img_path)
     if image is None:
         print(f"错误:无法加载图片 '{img_path}'.请检查路径是否正确.")
         return None
-        
     try:
         # 图像处理流程
         processed_image = process_id_card_image(image, show_process)
@@ -39,7 +37,7 @@ def init_ocr(img_path, out_path=None, model_name='scene-densenet_lite_136-gru', 
             
         # 如果需要转换为电子扫描件样式
         if convert_to_scan and out_path:
-            convert_to_scan_style(image, out_path)
+            convert_to_scan_style(processed_image, out_path)
         
         # 提取文本区域并识别
         gray = __gray_image(processed_image)
@@ -165,56 +163,34 @@ def convert_to_scan_style(image, out_path):
     返回:
     转换后的图像
     """
-    # 1. 调整亮度和对比度，适度增强
-    alpha = 1.1  # 对比度增强因子
-    beta = 2     # 亮度增强因子
+    # 1. 调整亮度和对比度，轻微增强（降低对比度强度）
+    alpha = 1.2  # 对比度增强因子（降低）
+    beta = 1     # 亮度增强因子（降低）
     adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
+
+    # 2. 锐化处理，增强文字边缘和色彩
+    kernel = np.array([[-0.2, -0.2, -0.2],
+                       [-0.2, 3, -0.2],
+                       [-0.2, -0.2, -0.2]])  # 降低锐化强度
+    sharpened = cv2.filter2D(adjusted, -1, kernel)
     
-    # 2. 添加轻微高斯模糊，模拟扫描时的轻微模糊效果
-    blurred = cv2.GaussianBlur(adjusted, (3, 3), 0.5)
-    
-    # 3. 添加轻微噪点，模拟扫描时的噪声
-    noise = np.zeros(blurred.shape, np.uint8)
-    cv2.randn(noise, 0, 5)  # 噪声强度
-    noisy = cv2.add(blurred, noise)
-    
-    # 4. 锐化处理，增强文字边缘和色彩
-    kernel = np.array([[-0.3, -0.3, -0.3],
-                       [-0.3, 5, -0.3],
-                       [-0.3, -0.3, -0.3]])  # 锐化强度
-    sharpened = cv2.filter2D(noisy, -1, kernel)
-    
-    # 5. 添加轻微的扫描线效果
+    # 3. 添加轻微的扫描线效果
     height, width = sharpened.shape[:2]
     scan_lines = np.zeros((height, width, 3), dtype=np.uint8)
     
     # 每隔一定像素添加一条轻微的扫描线
-    for i in range(0, height, 12):
+    for i in range(0, height, 15):  # 增加间隔，减少扫描线
         if i + 1 < height:
             scan_lines[i:i+1, :] = [0, 0, 0]
     
     # 将扫描线与图像混合
-    scan_alpha = 0.005  # 扫描线强度
+    scan_alpha = 0.003  # 降低扫描线强度
     result = cv2.addWeighted(sharpened, 1 - scan_alpha, scan_lines, scan_alpha, 0)
     
-    # 6. 添加轻微的边缘暗角效果（Vignette）
-    mask = np.zeros((height, width), dtype=np.uint8)
-    center = (width // 2, height // 2)
-    radius = int(min(width, height) // 1.5)
-    cv2.circle(mask, center, radius, 255, -1)
-    mask = cv2.GaussianBlur(mask, (height//5*2+1, width//5*2+1), 0)
-    
-    # 应用暗角效果
-    mask = mask.astype(np.float32) / 255.0
-    mask = np.expand_dims(mask, axis=2)
-    mask = np.repeat(mask, 3, axis=2)
-    vignette_alpha = 0.97
-    result = result * (mask * vignette_alpha + (1 - vignette_alpha))
-    
-    # 7. 增强色彩饱和度
+    # 6. 增强色彩饱和度
     hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    s = cv2.multiply(s, 1.1)  # 适度增加饱和度
+    s = cv2.multiply(s, 1.05)  # 轻微增加饱和度
     hsv = cv2.merge([h, s, v])
     bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     
@@ -262,7 +238,7 @@ def __filter_gray(gray):
     测试发现双边滤波对椒盐噪声的去除不好.因此混用中值滤波和双边滤波
     '''
     median = cv2.medianBlur(gray, ksize=5)
-    bilateral = cv2.bilateralFilter(median, d=9, sigmaColor=75, sigmaSpace=75)
+    bilateral = cv2.bilateralFilter(median, d=9, sigmaColor=25, sigmaSpace=50)
     '''
     image: 输入图像(一般是灰度图像)
     (5, 5):高斯核的大小,表示高斯模糊窗口的宽度和高度(必须为奇数,例如 (3, 3) 或 (5, 5)).
@@ -328,7 +304,7 @@ def __edge_binary(binary):
     True:使用公式 根号下 (G上底2下底X + G上底2下底Y)
     False: |G下底Z|+|G下底Y|
     """
-    edges = cv2.Canny(binary, 50, 150, 5, L2gradient=True)
+    edges = cv2.Canny(binary, 100, 150, 3)
     # 创建一个 3x3 的结构元素
     kernel = np.ones((3, 3), np.uint8)
     # 膨胀操作
@@ -399,7 +375,7 @@ def __perspective_image(image, contour):
 def __fixed_perspective(w, h, perspective):
     if w < h:
         perspective = np.rot90(perspective)
-    resized = cv2.resize(perspective, (300, 300), interpolation=cv2.INTER_AREA)
+    resized = cv2.resize(perspective, (1084, 669), interpolation=cv2.INTER_AREA)
     return resized
 
 
@@ -425,8 +401,13 @@ def __select_text(gray):
     # 使用全局OCR实例进行识别
     ocr_result = _ocr_instance.ocr(gray)
     
+    # 创建标签和值的映射
+    label_values = {label: "未识别" for label in labels}
+    label_positions = {label: None for label in labels}
+    
     # 处理OCR结果
     if ocr_result:
+        # 首先查找包含标签的文本
         for item in ocr_result:
             text = item['text']
             position = item['position']
@@ -435,20 +416,33 @@ def __select_text(gray):
             for label in labels:
                 if label in text:
                     # 提取标签后的内容
-                    value = text.split(label, 1)[1].strip()
-                    if value:
-                        result.append(f"{label}:{value}")
-                    else:
-                        result.append(f"{label}:未识别")
-                    positions.append(position)
-                    break
+                    parts = text.split(label, 1)
+                    if len(parts) > 1 and parts[1].strip():
+                        label_values[label] = parts[1].strip()
+                        label_positions[label] = position
+        
+        # 然后处理可能分开的标签和值
+        # 例如，标签和值可能在不同的OCR结果项中
+        for i, item in enumerate(ocr_result):
+            text = item['text'].strip()
+            position = item['position']
+            
+            # 检查是否是标签
+            for label in labels:
+                # 如果这一项是标签，且下一项可能是值
+                if text == label and label_values[label] == "未识别" and i + 1 < len(ocr_result):
+                    next_text = ocr_result[i + 1]['text'].strip()
+                    next_position = ocr_result[i + 1]['position']
+                    
+                    # 检查下一项是否可能是值（不包含其他标签）
+                    if not any(other_label in next_text for other_label in labels):
+                        label_values[label] = next_text
+                        label_positions[label] = next_position
     
-    # 确保所有标签都有结果
-    existing_labels = [item.split(':', 1)[0] for item in result]
+    # 构建结果列表
     for label in labels:
-        if label not in existing_labels:
-            result.append(f"{label}:未识别")
-            positions.append(None)
+        result.append(f"{label}:{label_values[label]}")
+        positions.append(label_positions[label])
     
     return result, positions
 
