@@ -7,7 +7,7 @@ import random
 # 全局OCR实例
 _ocr_instance = None
 
-def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
+def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
     '''
     加载CnOcr的模型并处理身份证图像
     
@@ -23,7 +23,6 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
     # 初始化OCR模型
     if _ocr_instance is None:
         _ocr_instance = CnOcr(model_name)
-    
     # 加载图片
     image = cv2.imread(img_path)
     if image is None:
@@ -32,8 +31,7 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
         
     # 如果需要转换为电子扫描件样式
     if convert_to_scan:
-        image = convert_to_scan_style(image)
-        
+        convert_to_scan_style(image,out_path)
     try:
         # 1.灰度处理
         gray = __gray_image(image)
@@ -81,7 +79,7 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
             
         # 9. 提取文本区域并识别
         gray = __gray_image(resized)
-        result, positions = __select_text(gray, contours, resize_copy, _ocr_instance, show_process)
+        result, positions = __select_text(gray)
         
         # 10. 将结果转换为字典格式
         result_dict = {}
@@ -109,7 +107,7 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
             
             # 更新身份证号码为清理后的值
             result_dict['公民身份号码'] = id_number
-            
+                # 显示识别结果
         return result_dict
         
     except Exception as e:
@@ -118,7 +116,7 @@ def init_ocr(img_path, model_name='scene-densenet_lite_136-gru', show_process=Fa
 
     
 # 将图像转换为电子扫描件样式
-def convert_to_scan_style(image):
+def convert_to_scan_style(image,out_path):
     """
     将图像转换为电子扫描件样式，保持原图的彩色信息
     
@@ -183,9 +181,17 @@ def convert_to_scan_style(image):
     # 合并通道
     hsv = cv2.merge([h, s, v])
     # 转回BGR
-    result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     
-    return result.astype(np.uint8)
+    scanned =  bgr.astype(np.uint8)
+    print("\n保存扫描样式图像...")
+        # 保存图像
+    result = cv2.imwrite(out_path, scanned)
+    show(scanned, "scanned")
+    if result:
+        print(f"扫描样式图像已保存到: {out_path}")
+    else:
+        print(f"保存图像失败: {out_path}")
 
 # 显示图片
 def show(image, window_name="default"):
@@ -369,93 +375,17 @@ def __check_id_card_text_location(resized):
     return contours, resize_copy
 
 
-def __select_text(gray, contours, resize_copy, ocr_instance, show_process=False):
-    positions = []
-    data_areas = {}
-    for contour in contours:
-        epsilon = 0.002 * cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, epsilon, True)
-        x, y, w, h = cv2.boundingRect(approx)
-        if h > 20 and w > 30 and x < 290:  # 调整参数以适应300x300的图像
-            cv2.rectangle(resize_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            area = gray[y:(y + h), x:(x + w)]
-            blur = cv2.medianBlur(area, 3)
-            data_area = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-            positions.append((x, y))
-            data_areas['{}-{}'.format(x, y)] = data_area
-    res, positions = __sort_id_card_text_location(data_areas, positions, ocr_instance, show_process)
-    return res, positions
+def __select_text(ocr_instance):
+    res = __sort_id_card_text_location(ocr_instance)
+    print(res)
+    return res
 
 
-def __sort_id_card_text_location(data_areas, positions, ocr_instance, show_process=False):
+def __sort_id_card_text_location(ocr_instance):
     # 身份证正面信息标签
     labels = ['姓名', '性别', '民族', '出生', '住址', '公民身份号码']
-    
-    # 按y坐标排序（从上到下）
-    positions.sort(key=lambda p: p[1])
-    
-    # 处理同一行的多个文本区域
-    result = []
-    index = 0
-    while index < len(positions) - 1:
-        # 如果两个区域的y坐标接近，认为它们在同一行
-        if index + 1 < len(positions) and abs(positions[index + 1][1] - positions[index][1]) < 10:
-            # 收集同一行的所有区域
-            same_row = [positions[index], positions[index + 1]]
-            i = index + 1
-            while i + 1 < len(positions) and abs(positions[i + 1][1] - positions[i][1]) < 10:
-                same_row.append(positions[i + 1])
-                i += 1
-            
-            # 按x坐标排序（从左到右）
-            same_row.sort(key=lambda p: p[0])
-            
-            # 更新positions列表
-            positions[index:index + len(same_row)] = same_row
-            index += len(same_row)
-        else:
-            index += 1
-    
-    # 识别每个区域的文本
-    recognized_results = []
-    for i, position in enumerate(positions):
-        if i >= len(labels):
-            break  # 防止超出标签数量
-            
-        data_area = data_areas['{}-{}'.format(position[0], position[1])]
-        
-        # 显示处理中的区域
-        if show_process:
-            show(data_area, f"区域_{i}_{labels[i]}")
-        
-        # OCR识别
-        try:
-            ocr_data = ocr_instance.ocr(data_area)
-            if ocr_data and len(ocr_data) > 0:
-                # 合并OCR结果
-                ocr_result = ''.join([''.join(item[0]) for item in ocr_data if item]).replace(' ', '')
-                
-                # 处理特殊字段
-                if labels[i] == '出生':
-                    # 尝试提取年月日
-                    import re
-                    date_match = re.search(r'(\d{4})年?(\d{1,2})月?(\d{1,2})日?', ocr_result)
-                    if date_match:
-                        year, month, day = date_match.groups()
-                        ocr_result = f"{year}年{month}月{day}日"
-                
-                recognized_results.append(f"{labels[i]}:{ocr_result}")
-            else:
-                recognized_results.append(f"{labels[i]}:未识别")
-        except Exception as e:
-            print(f"识别区域 {labels[i]} 时出错: {str(e)}")
-            recognized_results.append(f"{labels[i]}:识别错误")
-    
-    # 输出识别结果
-    for item in recognized_results:
-        print(item)
-        
-    return recognized_results, positions
+    out = _ocr_instance.ocr(img_path)
+    return out
 
 
 
