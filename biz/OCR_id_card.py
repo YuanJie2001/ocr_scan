@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from cnocr import CnOcr
-from .id_validator import validate_id_card, extract_info_from_id_card
+from utils import validate_id_card, extract_info_from_id_card
 
 # 全局OCR实例
 _ocr_instance = None
