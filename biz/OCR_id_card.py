@@ -2,19 +2,20 @@ import cv2
 import numpy as np
 from cnocr import CnOcr
 from .id_validator import validate_id_card, extract_info_from_id_card
-import random
 
 # 全局OCR实例
 _ocr_instance = None
 
-def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
+def init_ocr(img_path, out_path=None, model_name='scene-densenet_lite_136-gru', show_process=False, convert_to_scan=False):
     '''
     加载CnOcr的模型并处理身份证图像
     
     参数:
     img_path: 图片路径
+    out_path: 输出图片路径（仅在convert_to_scan=True时使用）
     model_name: 使用的OCR模型名称
     show_process: 是否显示处理过程中的图像
+    convert_to_scan: 是否将图像转换为扫描件样式
     
     返回:
     识别结果字典
@@ -23,6 +24,7 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
     # 初始化OCR模型
     if _ocr_instance is None:
         _ocr_instance = CnOcr(model_name)
+    
     # 加载图片
     image = cv2.imread(img_path)
     if image is None:
@@ -30,93 +32,125 @@ def init_ocr(img_path,out_path,model_name='scene-densenet_lite_136-gru', show_pr
         return None
         
     try:
-        # 1.灰度处理
-        gray = __gray_image(image)
-        if show_process:
-            show(gray, "gray")
-            
-        # 2.滤波
-        blur = __filter_gray(gray)
-        if show_process:
-            show(blur, "blur")
-            
-        # CLAHE对比度增强
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(blur)
-        if show_process:
-            show(enhanced, "enhanced")
-
-        # 3.二值化
-        binary = __binary_filter(enhanced)
-        if show_process:
-            show(binary, "binary")
-            
-        # 4.边缘检测并膨胀
-        dilation = __edge_binary(binary)
-        if show_process:
-            show(dilation, "dilation")
-            
-        # 5.轮廓检测
-        contour = __find_contours(dilation)
-        if contour is None:
-            print("轮廓检测失败,无法继续处理.")
+        # 图像处理流程
+        processed_image = process_id_card_image(image, show_process)
+        if processed_image is None:
             return None
             
-        # 6.透视变换
-        w, h, perspective = __perspective_image(image, contour)
-        if perspective is None:
-            print("透视变换失败,无法继续处理.")
-            return None
-        if show_process:
-            show(perspective, "perspective")
-            
-        # 7. 固定位置
-        resized = __fixed_perspective(w, h, perspective)
-        if show_process:
-            show(resized, "resized")
-            # 如果需要转换为电子扫描件样式
-        if convert_to_scan:
-            convert_to_scan_style(image,out_path) 
-        # 8. 检测文本位置并识别
-        contours, resize_copy = __check_id_card_text_location(resized)
-        if show_process:
-            show(resize_copy, "resize_copy")
-            
-        # 9. 提取文本区域并识别
-        gray = __gray_image(resized)
+        # 如果需要转换为电子扫描件样式
+        if convert_to_scan and out_path:
+            convert_to_scan_style(image, out_path)
+        
+        # 提取文本区域并识别
+        gray = __gray_image(processed_image)
         result, positions = __select_text(gray)
         
-        # 10. 将结果转换为字典格式
-        result_dict = {}
-        for item in result:
-            key, value = item.split(':', 1)
-            result_dict[key] = value
+        # 将结果转换为字典格式并验证身份证号码
+        result_dict = process_ocr_result(result)
         
-        # 11. 验证身份证号码
-        if '公民身份号码' in result_dict and result_dict['公民身份号码'] != '未识别' and result_dict['公民身份号码'] != '识别错误':
-            id_number = result_dict['公民身份号码']
-            # 清理可能的空格和特殊字符
-            id_number = ''.join(c for c in id_number if c.isdigit() or c.upper() == 'X')
-            
-            # 验证身份证号码
-            is_valid, error_msg = validate_id_card(id_number)
-            result_dict['身份证号码验证'] = '有效' if is_valid else f'无效: {error_msg}'
-            
-            # 如果有效，提取更多信息
-            if is_valid:
-                extra_info = extract_info_from_id_card(id_number)
-                # 添加额外信息到结果中
-                for key, value in extra_info.items():
-                    if key not in result_dict:
-                        result_dict[key] = value
-            
-            # 更新身份证号码为清理后的值
-            result_dict['公民身份号码'] = id_number
-                # 显示识别结果
         return result_dict
     except Exception as e:
         print(f"处理过程中发生错误: {str(e)}")
         return None
+
+
+def process_id_card_image(image, show_process=False):
+    '''
+    处理身份证图像，包括灰度处理、滤波、对比度增强、二值化、边缘检测、透视变换等
+    
+    参数:
+    image: 输入图像
+    show_process: 是否显示处理过程
+    
+    返回:
+    处理后的图像
+    '''
+    # 1.灰度处理
+    gray = __gray_image(image)
+    if show_process:
+        show(gray, "gray")
+        
+    # 2.滤波
+    blur = __filter_gray(gray)
+    if show_process:
+        show(blur, "blur")
+        
+    # 3.CLAHE对比度增强
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(blur)
+    if show_process:
+        show(enhanced, "enhanced")
+
+    # 4.二值化
+    binary = __binary_filter(enhanced)
+    if show_process:
+        show(binary, "binary")
+        
+    # 5.边缘检测并膨胀
+    dilation = __edge_binary(binary)
+    if show_process:
+        show(dilation, "dilation")
+        
+    # 6.轮廓检测
+    contour = __find_contours(dilation)
+    if contour is None:
+        print("轮廓检测失败,无法继续处理.")
+        return None
+        
+    # 7.透视变换
+    w, h, perspective = __perspective_image(image, contour)
+    if perspective is None:
+        print("透视变换失败,无法继续处理.")
+        return None
+    if show_process:
+        show(perspective, "perspective")
+        
+    # 8.固定位置和大小
+    resized = __fixed_perspective(w, h, perspective)
+    if show_process:
+        show(resized, "resized")
+    
+    return resized
+
+
+def process_ocr_result(result):
+    '''
+    处理OCR识别结果，转换为字典格式并验证身份证号码
+    
+    参数:
+    result: OCR识别结果列表
+    
+    返回:
+    处理后的结果字典
+    '''
+    # 将结果转换为字典格式
+    result_dict = {}
+    for item in result:
+        key, value = item.split(':', 1)
+        result_dict[key] = value
+    
+    # 验证身份证号码
+    if '公民身份号码' in result_dict and result_dict['公民身份号码'] != '未识别' and result_dict['公民身份号码'] != '识别错误':
+        id_number = result_dict['公民身份号码']
+        # 清理可能的空格和特殊字符
+        id_number = ''.join(c for c in id_number if c.isdigit() or c.upper() == 'X')
+        
+        # 验证身份证号码
+        is_valid, error_msg = validate_id_card(id_number)
+        result_dict['身份证号码验证'] = '有效' if is_valid else f'无效: {error_msg}'
+        
+        # 如果有效，提取更多信息
+        if is_valid:
+            extra_info = extract_info_from_id_card(id_number)
+            # 添加额外信息到结果中
+            for key, value in extra_info.items():
+                if key not in result_dict:
+                    result_dict[key] = value
+        
+        # 更新身份证号码为清理后的值
+        result_dict['公民身份号码'] = id_number
+    
+    return result_dict
 
     
 # 将图像转换为电子扫描件样式
@@ -132,8 +166,8 @@ def convert_to_scan_style(image, out_path):
     转换后的图像
     """
     # 1. 调整亮度和对比度，适度增强
-    alpha = 1.1  # 降低对比度增强因子
-    beta = 2     # 降低亮度增强因子
+    alpha = 1.1  # 对比度增强因子
+    beta = 2     # 亮度增强因子
     adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
     
     # 2. 添加轻微高斯模糊，模拟扫描时的轻微模糊效果
@@ -141,55 +175,53 @@ def convert_to_scan_style(image, out_path):
     
     # 3. 添加轻微噪点，模拟扫描时的噪声
     noise = np.zeros(blurred.shape, np.uint8)
-    cv2.randn(noise, 0, 5)  # 减小噪声强度
+    cv2.randn(noise, 0, 5)  # 噪声强度
     noisy = cv2.add(blurred, noise)
     
     # 4. 锐化处理，增强文字边缘和色彩
     kernel = np.array([[-0.3, -0.3, -0.3],
                        [-0.3, 5, -0.3],
-                       [-0.3, -0.3, -0.3]])  # 减小锐化强度
+                       [-0.3, -0.3, -0.3]])  # 锐化强度
     sharpened = cv2.filter2D(noisy, -1, kernel)
     
     # 5. 添加轻微的扫描线效果
     height, width = sharpened.shape[:2]
     scan_lines = np.zeros((height, width, 3), dtype=np.uint8)
     
-    # 每隔更多像素添加一条非常轻微的扫描线
-    for i in range(0, height, 12):  # 增加间隔，减少扫描线
+    # 每隔一定像素添加一条轻微的扫描线
+    for i in range(0, height, 12):
         if i + 1 < height:
             scan_lines[i:i+1, :] = [0, 0, 0]
     
-    # 将扫描线与图像混合，减小扫描线强度
-    scan_alpha = 0.005  # 减小扫描线强度
+    # 将扫描线与图像混合
+    scan_alpha = 0.005  # 扫描线强度
     result = cv2.addWeighted(sharpened, 1 - scan_alpha, scan_lines, scan_alpha, 0)
     
-    # 6. 添加非常轻微的边缘暗角效果（Vignette）
+    # 6. 添加轻微的边缘暗角效果（Vignette）
     mask = np.zeros((height, width), dtype=np.uint8)
     center = (width // 2, height // 2)
-    radius = int(min(width, height) // 1.5)  # 增大半径，减小暗角效果
+    radius = int(min(width, height) // 1.5)
     cv2.circle(mask, center, radius, 255, -1)
     mask = cv2.GaussianBlur(mask, (height//5*2+1, width//5*2+1), 0)
     
-    # 应用暗角效果，减小暗角强度
+    # 应用暗角效果
     mask = mask.astype(np.float32) / 255.0
     mask = np.expand_dims(mask, axis=2)
     mask = np.repeat(mask, 3, axis=2)
-    vignette_alpha = 0.97  # 增大该值，减小暗角强度
+    vignette_alpha = 0.97
     result = result * (mask * vignette_alpha + (1 - vignette_alpha))
     
-    # 7. 增强色彩饱和度，但不要过度
+    # 7. 增强色彩饱和度
     hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    # 适度增加饱和度
-    s = cv2.multiply(s, 1.1)
-    # 合并通道
+    s = cv2.multiply(s, 1.1)  # 适度增加饱和度
     hsv = cv2.merge([h, s, v])
-    # 转回BGR
     bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     
     scanned = bgr.astype(np.uint8)
-    print("\n保存扫描样式图像...")
+    
     # 保存图像
+    print("\n保存扫描样式图像...")
     result = cv2.imwrite(out_path, scanned)
     show(scanned, "scanned")
     if result:
@@ -371,36 +403,27 @@ def __fixed_perspective(w, h, perspective):
     return resized
 
 
-# 检验身份证文本位置
-def __check_id_card_text_location(resized):
-    # 对截取到得身份证重新 灰度、滤波、二值化...
-    gray = __gray_image(resized)
-    blur = __filter_gray(gray)
-    binary = __binary_filter(blur)
-    dilation = __edge_binary(binary)
-    contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    resize_copy = resized.copy()
-    return contours, resize_copy
+# 此函数已被移除，其功能已整合到process_id_card_image函数中
 
 
 def __select_text(gray):
     """
-    对灰度图像进行OCR识别
+    对灰度图像进行OCR识别，提取身份证信息
     
     参数:
     gray: 灰度图像
     
     返回:
-    识别结果和位置信息
+    识别结果和位置信息的元组 (result, positions)
     """
     result = []
     positions = []
     
-    # 使用全局OCR实例进行识别
-    ocr_result = _ocr_instance.ocr(gray)
-    
     # 身份证正面信息标签
     labels = ['姓名', '性别', '民族', '出生', '住址', '公民身份号码']
+    
+    # 使用全局OCR实例进行识别
+    ocr_result = _ocr_instance.ocr(gray)
     
     # 处理OCR结果
     if ocr_result:
