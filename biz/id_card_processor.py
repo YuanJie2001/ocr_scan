@@ -59,18 +59,13 @@ class IDCardProcessor(ImageABC):
         if show_process:
             self.show(binary, "binary")
             
-        # 5.边缘检测并膨胀
-        dilation = self.edge_binary(binary)
-        if show_process:
-            self.show(dilation, "dilation")
-            
-        # 6.轮廓检测
-        contour = self.find_contours(dilation)
+        # 5.膨胀并边缘检测
+        contour = self.edge_binary(binary)
         if show_process:
             image_copy = image.copy()
             self.show(cv2.drawContours(image_copy, contour, -1, (255, 0, 0), 20), "contour")
             
-        # 7.透视变换
+        # 6.透视变换
         w, h, perspective = self._perspective_image(image, contour)
         if perspective is None:
             print("透视变换失败,无法继续处理.")
@@ -78,7 +73,7 @@ class IDCardProcessor(ImageABC):
         if show_process:
             self.show(perspective, "perspective")
             
-        # 8.固定位置和大小
+        # 7.固定位置和大小
         resized = self._fixed_perspective(w, h, perspective)
         if show_process:
             self.show(resized, "resized")

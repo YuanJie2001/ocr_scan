@@ -141,7 +141,7 @@ class ImageABC(ABC):
         # threshold = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
         return threshold
     
-    # 通用方法 - 边缘检测和膨胀处理
+    # 通用方法 - 边缘检测和膨胀处理 TODO 更新为轮廓检测模型
     def edge_binary(self, binary):
         """
         边缘检测和膨胀处理
@@ -155,22 +155,10 @@ class ImageABC(ABC):
         edges = cv2.Canny(binary, 100, 150, 3)
         kernel = np.ones((3, 3), np.uint8)
         dilation = cv2.dilate(edges, kernel, iterations=5)
-        return dilation
-    
-    # 通用方法 - 轮廓检测 TODO 更新为轮廓检测模型
-    def find_contours(self, dilation):
-        """
-        轮廓检测
-        
-        参数:
-        dilation: 膨胀处理后的图像
-        
-        返回:
-        最大轮廓
-        """
         contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contour = max(contours, key=cv2.contourArea)
         return contour
+    
     
     # 通用方法 - 将图像转换为电子扫描件样式
     def convert_to_scan_style(self, image, out_path=None):
