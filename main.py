@@ -1,4 +1,4 @@
-from biz import init_ocr, show, convert_to_scan_style
+from biz import init_ocr
 import os
 import cv2
 
