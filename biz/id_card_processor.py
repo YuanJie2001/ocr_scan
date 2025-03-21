@@ -42,8 +42,6 @@ class IDCardProcessor(ImageABC):
         """
         # 1.灰度处理
         gray = self.gray_image(image)
-        if show_process:
-            self.show(gray, "gray")
             
         # 2.滤波
         blur = self.filter_gray(gray)
