@@ -68,9 +68,9 @@ class IDCardProcessor(ImageABC):
             
         # 6.轮廓检测
         contour = self.find_contours(dilation)
-        if contour is None:
-            print("轮廓检测失败,无法继续处理.")
-            return None
+        if show_process:
+            image_copy = image.copy()
+            self.show(cv2.drawContours(image_copy, contour, -1, (255, 0, 0), 20), "contour")
             
         # 7.透视变换
         w, h, perspective = self._perspective_image(image, contour)
