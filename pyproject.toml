@@ -1,7 +1,7 @@
 [project]
 name = "ocrid"
 version = "0.1.0"
-description = "Add your description here"
+description = "A high-performance OCR tool for text recognition2PDF."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
 dependencies = [
@@ -11,5 +11,15 @@ dependencies = [
     "torch",
     "torchaudio",
     "torchvision",
-    "onnxruntime-gpu>=1.15.0"
 ]
+
+[[tool.uv.index]]
+name = "internal-proxy"
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+[[tool.uv.index]]
+name = "huawei"
+url = "https://mirrors.huaweicloud.com/repository/pypi/simple"
