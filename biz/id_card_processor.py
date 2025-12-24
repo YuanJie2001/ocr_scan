@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
 from cnocr import CnOcr
-from utils import validate_id_card, extract_info_from_id_card
+from utils.pdf import PDFGenerator
+from utils.id_validator import IDCardValidator
 from base import ImageABC
 
 
@@ -41,10 +42,6 @@ class IDCardProcessor(ImageABC):
         返回:
         处理后的图像
         """
-        gray = self.color_balance(image)
-        pepo = self.remove_background_color(gray)
-        s = self.enhance_text_area(pepo)
-
         # 1.灰度处理
         gray = self.gray_image(image)
 
@@ -105,12 +102,12 @@ class IDCardProcessor(ImageABC):
             id_number = "".join(c for c in id_number if c.isdigit() or c.upper() == "X")
 
             # 验证身份证号码
-            is_valid, error_msg = validate_id_card(id_number)
+            is_valid, error_msg = IDCardValidator.validate_id_card(id_number)
             result_dict["身份证号码验证"] = "有效" if is_valid else f"无效: {error_msg}"
 
             # 如果有效，提取更多信息
             if is_valid:
-                extra_info = extract_info_from_id_card(id_number)
+                extra_info = IDCardValidator.extract_info_from_id_card(id_number)
                 # 添加额外信息到结果中
                 for key, value in extra_info.items():
                     if key not in result_dict:
@@ -153,7 +150,8 @@ class IDCardProcessor(ImageABC):
 
             # 如果需要转换为电子扫描件样式
             if convert_to_scan and out_path:
-                self.convert_to_scan_style(processed_image, out_path)
+                self.convert_to_scan_style_v2(processed_image, out_path, show_process)
+            # self.convert_to_scan_style(processed_image, out_path)
 
             # 提取文本区域并识别
             gray = self.gray_image(processed_image)
@@ -161,6 +159,15 @@ class IDCardProcessor(ImageABC):
 
             # 将结果转换为字典格式并验证身份证号码
             result_dict = self.process_result(result)
+
+            pdf_path = out_path.replace(".jpg", ".pdf")
+
+            PDFGenerator.generate_idcard_pdf(
+                pdf_path=pdf_path,
+                scan_image_path=out_path,
+                ocr_result=result,
+                ocr_positions=positions
+            )
 
             return result_dict
         except Exception as e:

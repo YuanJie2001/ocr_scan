@@ -108,6 +108,47 @@ class ImageABC(ABC):
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10
         )
 
+    def convert_to_scan_style_v2(self, image, out_path=None, show=False):
+        """
+        生成真实扫描仪风格的身份证图像（用于PDF底图）
+        不添加扫描线、不加伪特效
+        """
+
+        # 1️⃣ 文档级白平衡 & 光照归一（核心）
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+
+        lab = cv2.merge([l, a, b])
+        balanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        # 2️⃣ 轻度去噪（保护文字）
+        denoise = cv2.fastNlMeansDenoisingColored(
+            balanced, None,
+            h=6, hColor=6,
+            templateWindowSize=7,
+            searchWindowSize=21
+        )
+
+        # 3️⃣ 降低饱和度（扫描件关键特征）
+        hsv = cv2.cvtColor(denoise, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        s = (s * 0.65).astype(np.uint8)
+        scan_img = cv2.cvtColor(cv2.merge([h, s, v]), cv2.COLOR_HSV2BGR)
+
+        # 4️⃣ 文档对比微调（不锐化）
+        scan_img = cv2.convertScaleAbs(scan_img, alpha=1.05, beta=5)
+
+        if out_path:
+            cv2.imwrite(out_path, scan_img)
+
+        if show:
+            self.show(scan_img, "scan_style")
+
+        return scan_img
+
     # 通用方法 - 灰度处理
     def gray_image(self, image):
         """
