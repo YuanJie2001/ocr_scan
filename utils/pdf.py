@@ -24,7 +24,7 @@ class PDFGenerator:
         c = canvas.Canvas(pdf_path, pagesize=page_size)
         page_w, page_h = page_size
 
-        # 1️⃣ 绘制扫描图（铺满页面）
+        # 1.绘制扫描图（铺满页面）
         img = ImageReader(scan_image_path)
         img_w, img_h = img.getSize()
 
@@ -36,7 +36,7 @@ class PDFGenerator:
 
         c.drawImage(img, x0, y0, width=draw_w, height=draw_h)
 
-        # 2️⃣ OCR 文本层（透明）
+        # 2. OCR 文本层（透明）
         c.setFont("STSong-Light", 10)
         c.setFillColor(Color(0, 0, 0, alpha=0))  # 关键：透明
 
