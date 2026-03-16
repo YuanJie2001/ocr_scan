@@ -74,6 +74,46 @@ class PDFGenerator:
         return pdf_path
 
     @staticmethod
+    def generate_batch(
+        pdf_path: str,
+        items: list[dict],
+        page_size: tuple = A4,
+    ) -> str:
+        """
+        Generate a single PDF for multiple ID cards.
+
+        Each item should contain:
+            - card_image_path: str
+            - id_info: IDCardInfo | None
+            - ocr_results: list | None
+        """
+        _ensure_font()
+
+        os.makedirs(os.path.dirname(pdf_path) or ".", exist_ok=True)
+
+        c = canvas.Canvas(pdf_path, pagesize=page_size)
+        page_w, page_h = page_size
+
+        for item in items:
+            card_image_path = item.get("card_image_path")
+            id_info = item.get("id_info")
+            ocr_results = item.get("ocr_results")
+
+            if card_image_path and os.path.exists(card_image_path):
+                PDFGenerator._draw_card_page(
+                    c, card_image_path, ocr_results, page_w, page_h
+                )
+            elif card_image_path:
+                logger.warning("Card image not found: %s, skipping image page", card_image_path)
+
+            if id_info:
+                PDFGenerator._draw_info_page(c, id_info, page_w, page_h)
+
+        c.save()
+        logger.info("PDF generated: %s", pdf_path)
+        return pdf_path
+
+    @staticmethod
     def _draw_card_page(
         c: canvas.Canvas,
         image_path: str,

@@ -44,8 +44,11 @@ def _ensure_qt_app():
 
     from PyQt6.QtWidgets import QApplication
 
-    _QT_APP = QApplication.instance() or QApplication([])
-    _QT_APP.setQuitOnLastWindowClosed(False)
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+        app.setQuitOnLastWindowClosed(False)
+    _QT_APP = app
     return _QT_APP
 
 
@@ -161,14 +164,14 @@ def _select_roi_polygon_qt(image: np.ndarray) -> np.ndarray | None:
             super().__init__()
             self._selection: list[QPoint] | None = None
 
-            self._confirm = QPushButton("Confirm")
+            self._confirm = QPushButton("确认")
             self._confirm.setEnabled(False)
             self._confirm.clicked.connect(self._confirm_selection)
 
-            self._reset = QPushButton("Reset")
+            self._reset = QPushButton("重置")
             self._reset.clicked.connect(self._reset_selection)
 
-            self._cancel = QPushButton("Cancel")
+            self._cancel = QPushButton("取消")
             self._cancel.clicked.connect(self.reject)
 
             def _on_change():

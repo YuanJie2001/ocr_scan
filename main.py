@@ -229,7 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # 输入参数（互斥）
-    input_group = ap.add_mutually_exclusive_group(required=True)
+    input_group = ap.add_mutually_exclusive_group()
     input_group.add_argument("--input", "-i", help="单张图片路径")
     input_group.add_argument("--input-dir", "-d", help="批量处理的输入目录")
 
@@ -245,12 +245,25 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _run_gui() -> None:
+    try:
+        from gui_app import run
+    except Exception as exc:
+        logger.error("GUI launch failed: %s", exc)
+        sys.exit(1)
+    run()
+
+
 def main():
     """主函数"""
     args = build_parser().parse_args()
 
     # 初始化日志
     setup_logging(args.log_level)
+
+    if not args.input and not args.input_dir:
+        _run_gui()
+        return
 
     # 确保输出目录存在
     os.makedirs(args.output_dir, exist_ok=True)
