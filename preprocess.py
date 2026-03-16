@@ -180,6 +180,62 @@ class IDCardPreprocessor:
         logger.debug("裁剪区域: (%d,%d)-(%d,%d)，图像尺寸: %dx%d", x1, y1, x2, y2, cropped.shape[1], cropped.shape[0])
         return cropped
 
+    def crop_polygon(self, image: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+        """
+        Polygon crop: mask outside area and return the bounded region.
+
+        Args:
+            image: Input image (BGR)
+            polygon: Nx2 polygon points
+
+        Returns:
+            Cropped image
+        """
+        h, w = image.shape[:2]
+        pts = np.asarray(polygon, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] != 2:
+            logger.warning("Polygon ROI format invalid, skip crop")
+            return image
+
+        pts[:, 0] = np.clip(pts[:, 0], 0, w - 1)
+        pts[:, 1] = np.clip(pts[:, 1], 0, h - 1)
+        pts_i = pts.astype(np.int32)
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts_i], 255)
+
+        if image.ndim == 2:
+            masked = np.full(image.shape, 255, dtype=image.dtype)
+            masked[mask > 0] = image[mask > 0]
+        else:
+            masked = np.full_like(image, 255)
+            masked[mask > 0] = image[mask > 0]
+
+        x, y, bw, bh = cv2.boundingRect(pts_i)
+        if bw <= 2 or bh <= 2:
+            logger.warning("Polygon ROI bounding box invalid, skip crop")
+            return masked
+
+        margin_x = int(bw * 0.03)
+        margin_y = int(bh * 0.03)
+
+        x1 = max(0, x - margin_x)
+        y1 = max(0, y - margin_y)
+        x2 = min(w, x + bw + margin_x)
+        y2 = min(h, y + bh + margin_y)
+
+        cropped = masked[y1:y2, x1:x2]
+        logger.debug(
+            "Polygon crop area: (%d,%d)-(%d,%d), size: %dx%d",
+            x1,
+            y1,
+            x2,
+            y2,
+            cropped.shape[1],
+            cropped.shape[0],
+        )
+        return cropped
+
     def perspective_correct(self, image: np.ndarray, show_process: bool = False) -> np.ndarray | None:
         """
         透视矫正：检测身份证轮廓并进行透视变换
@@ -317,7 +373,13 @@ class IDCardPreprocessor:
         """
         # 1. 裁剪（如有检测框）
         if bbox is not None:
-            image = self.crop(image, bbox)
+            roi = np.asarray(bbox)
+            if roi.ndim == 1 and roi.shape[0] == 4:
+                image = self.crop(image, roi)
+            elif roi.ndim == 2 and roi.shape[1] == 2 and roi.shape[0] >= 3:
+                image = self.crop_polygon(image, roi)
+            else:
+                logger.warning("ROI format invalid, skip crop")
 
         # 2. 透视矫正 + 旋转校正 + 标准化
         processed = self.process_image(image, show_process)

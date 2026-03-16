@@ -15,14 +15,26 @@ logger = logging.getLogger(__name__)
 _QT_APP = None
 
 
-def select_roi_bbox(image: np.ndarray) -> np.ndarray | None:
+def select_roi_polygon(image: np.ndarray) -> np.ndarray | None:
     """
-    Select a ROI and return bbox as [x1, y1, x2, y2] in original image coords.
+    Select a polygon ROI and return Nx2 points in original image coords.
     """
     if image is None:
         return None
 
-    return _select_roi_qt(image)
+    return _select_roi_polygon_qt(image)
+
+
+def select_roi_bbox(image: np.ndarray) -> np.ndarray | None:
+    """
+    Select a polygon ROI and return bbox as [x1, y1, x2, y2] in original image coords.
+    """
+    polygon = select_roi_polygon(image)
+    if polygon is None:
+        return None
+
+    x, y, w, h = cv2.boundingRect(polygon.astype(np.int32))
+    return np.array([x, y, x + w, y + h], dtype=float)
 
 
 def _ensure_qt_app():
@@ -37,60 +49,164 @@ def _ensure_qt_app():
     return _QT_APP
 
 
-def _select_roi_qt(image: np.ndarray) -> np.ndarray | None:
+def _select_roi_polygon_qt(image: np.ndarray) -> np.ndarray | None:
     try:
-        from PyQt6.QtCore import Qt, QRect, QSize
-        from PyQt6.QtGui import QImage, QPainter, QPixmap
-        from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QRubberBand, QWidget
+        from PyQt6.QtCore import Qt, QPoint
+        from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygon, QPixmap
+        from PyQt6.QtWidgets import (
+            QApplication,
+            QDialog,
+            QHBoxLayout,
+            QLabel,
+            QPushButton,
+            QVBoxLayout,
+            QWidget,
+        )
     except Exception as exc:
         raise ImportError("PyQt6 is required for manual ROI selection") from exc
 
-    class ImageCropWidget(QWidget):
-        def __init__(self, pixmap: QPixmap, done_callback):
+    class PolygonCropWidget(QWidget):
+        def __init__(self, pixmap: QPixmap, on_change):
             super().__init__()
             self._pixmap = pixmap
-            self._rubber = QRubberBand(QRubberBand.Shape.Rectangle, self)
-            self._origin = None
-            self._done_callback = done_callback
+            self._points: list[QPoint] = []
+            self._closed = False
+            self._hover_pos: QPoint | None = None
+            self._on_change = on_change
+            self.setMouseTracking(True)
+            self.setCursor(Qt.CursorShape.CrossCursor)
 
-        def paintEvent(self, event):
-            painter = QPainter(self)
-            painter.drawPixmap(0, 0, self._pixmap)
+        @property
+        def points(self) -> list[QPoint]:
+            return self._points
+
+        @property
+        def closed(self) -> bool:
+            return self._closed
+
+        def reset(self) -> None:
+            self._points = []
+            self._closed = False
+            self._hover_pos = None
+            self._on_change()
+            self.update()
+
+        def _close_polygon(self) -> None:
+            if len(self._points) >= 3 and not self._closed:
+                self._closed = True
+                self._on_change()
+                self.update()
+
+        def _near_first(self, pos: QPoint) -> bool:
+            if not self._points:
+                return False
+            first = self._points[0]
+            dx = pos.x() - first.x()
+            dy = pos.y() - first.y()
+            return dx * dx + dy * dy <= 64
 
         def mousePressEvent(self, event):
             if event.button() == Qt.MouseButton.LeftButton:
-                self._origin = event.position().toPoint()
-                self._rubber.setGeometry(QRect(self._origin, QSize()))
-                self._rubber.show()
+                if self._closed:
+                    return
+                pos = event.position().toPoint()
+                if len(self._points) >= 3 and self._near_first(pos):
+                    self._close_polygon()
+                    return
+                self._points.append(pos)
+                self._on_change()
+                self.update()
+            elif event.button() == Qt.MouseButton.RightButton:
+                self._close_polygon()
 
         def mouseMoveEvent(self, event):
-            if self._origin is not None:
-                self._rubber.setGeometry(
-                    QRect(self._origin, event.position().toPoint()).normalized()
-                )
+            if not self._closed and self._points:
+                self._hover_pos = event.position().toPoint()
+                self.update()
 
-        def mouseReleaseEvent(self, event):
-            if self._origin is not None:
-                rect = self._rubber.geometry()
-                self._rubber.hide()
-                self._done_callback(rect)
+        def mouseDoubleClickEvent(self, event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._close_polygon()
+
+        def paintEvent(self, event):
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.drawPixmap(0, 0, self._pixmap)
+
+            if not self._points:
+                return
+
+            line_pen = QPen(QColor(0, 200, 0), 2)
+            painter.setPen(line_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            for i in range(len(self._points) - 1):
+                painter.drawLine(self._points[i], self._points[i + 1])
+
+            if self._closed:
+                painter.drawLine(self._points[-1], self._points[0])
+                painter.setBrush(QBrush(QColor(0, 200, 0, 60)))
+                painter.drawPolygon(QPolygon(self._points))
+            elif self._hover_pos is not None:
+                painter.drawLine(self._points[-1], self._hover_pos)
+
+            point_pen = QPen(QColor(220, 0, 0), 2)
+            painter.setPen(point_pen)
+            painter.setBrush(QBrush(QColor(220, 0, 0)))
+            for point in self._points:
+                painter.drawEllipse(point, 3, 3)
 
     class ROISelector(QDialog):
         def __init__(self, pixmap: QPixmap):
             super().__init__()
-            self._selection = None
+            self._selection: list[QPoint] | None = None
 
-            def _done(rect: QRect):
-                self._selection = rect
-                self.accept()
+            self._confirm = QPushButton("Confirm")
+            self._confirm.setEnabled(False)
+            self._confirm.clicked.connect(self._confirm_selection)
 
-            widget = ImageCropWidget(pixmap, _done)
+            self._reset = QPushButton("Reset")
+            self._reset.clicked.connect(self._reset_selection)
+
+            self._cancel = QPushButton("Cancel")
+            self._cancel.clicked.connect(self.reject)
+
+            def _on_change():
+                self._confirm.setEnabled(widget.closed and len(widget.points) >= 3)
+
+            widget = PolygonCropWidget(pixmap, _on_change)
+            widget.setFixedSize(pixmap.width(), pixmap.height())
+
+            hint = QLabel(
+                "Left click to add points. Right click or double click to close. "
+                "Click Confirm to crop."
+            )
+            hint.setWordWrap(True)
+
+            buttons = QHBoxLayout()
+            buttons.addStretch(1)
+            buttons.addWidget(self._reset)
+            buttons.addWidget(self._cancel)
+            buttons.addWidget(self._confirm)
+
             layout = QVBoxLayout(self)
-            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setContentsMargins(6, 6, 6, 6)
+            layout.addWidget(hint)
             layout.addWidget(widget)
+            layout.addLayout(buttons)
             self.setLayout(layout)
-            self.setWindowTitle("Select ID Card Region")
-            self.setFixedSize(pixmap.width(), pixmap.height())
+            self.setWindowTitle("Select ID Card Polygon")
+
+            self._widget = widget
+
+        def _confirm_selection(self):
+            if not self._widget.closed or len(self._widget.points) < 3:
+                return
+            self._selection = list(self._widget.points)
+            self.accept()
+
+        def _reset_selection(self):
+            self._widget.reset()
 
         @property
         def selection(self):
@@ -132,17 +248,15 @@ def _select_roi_qt(image: np.ndarray) -> np.ndarray | None:
     if dlg.exec() != QDialog.DialogCode.Accepted or dlg.selection is None:
         return None
 
-    rect = dlg.selection
-    x = int(rect.x() / scale)
-    y = int(rect.y() / scale)
-    w = int(rect.width() / scale)
-    h = int(rect.height() / scale)
+    points = []
+    for point in dlg.selection:
+        x = int(point.x() / scale)
+        y = int(point.y() / scale)
+        x = max(0, min(img_w - 1, x))
+        y = max(0, min(img_h - 1, y))
+        points.append([x, y])
 
-    if w <= 2 or h <= 2:
+    if len(points) < 3:
         return None
 
-    x1 = max(0, x)
-    y1 = max(0, y)
-    x2 = min(img_w, x + w)
-    y2 = min(img_h, y + h)
-    return np.array([x1, y1, x2, y2], dtype=float)
+    return np.array(points, dtype=float)

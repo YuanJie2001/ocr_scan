@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
-def _select_manual_bbox(image):
+def _select_manual_roi(image):
     """使用手动框选返回 ROI 边界框"""
-    from roi_selector import select_roi_bbox
+    from roi_selector import select_roi_polygon
 
-    return select_roi_bbox(image)
+    return select_roi_polygon(image)
 
 
 def process_single(
@@ -72,7 +72,7 @@ def process_single(
 
     # 2. 强制手动裁剪
     try:
-        bbox = _select_manual_bbox(image)
+        bbox = _select_manual_roi(image)
     except Exception as exc:
         logger.error("Qt6 ROI failed: %s", exc)
         logger.error("Ensure PyQt6 is installed and GUI is available. Try: uv sync --extra gui")
