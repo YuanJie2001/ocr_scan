@@ -11,7 +11,9 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # OCR
 OCR_LANG = os.environ.get("IDCARD_OCR_LANG", "ch")
-OCR_USE_GPU = os.environ.get("IDCARD_OCR_GPU", "false").lower() == "true"
+OCR_ENGINE_TYPE = os.environ.get("IDCARD_OCR_ENGINE", "onnxruntime")
+OCR_MODEL_TYPE = os.environ.get("IDCARD_OCR_MODEL_TYPE", "mobile")
+OCR_VERSION = os.environ.get("IDCARD_OCR_VERSION", "PP-OCRv4")
 OCR_USE_ANGLE_CLS = True
 OCR_DET_DB_THRESH = 0.3
 OCR_DET_DB_BOX_THRESH = 0.5

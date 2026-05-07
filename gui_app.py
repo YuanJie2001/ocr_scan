@@ -4,6 +4,10 @@ import logging
 import os
 import sys
 
+from ocr_engine import OCREngine, preload_onnxruntime
+
+preload_onnxruntime()
+
 import cv2
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QImage, QPixmap
@@ -21,10 +25,9 @@ from PyQt6.QtWidgets import (
 )
 
 import config
-from ocr_engine import OCREngine
+from image_scan_extractor import ImageScanExtractor
 from parser import IDCardParser
 from pdf_generator import PDFGenerator
-from preprocess import IDCardPreprocessor
 from roi_selector import select_roi_polygon
 
 logger = logging.getLogger(__name__)
@@ -52,7 +55,7 @@ def _to_pixmap(image, size: int = THUMBNAIL_SIZE) -> QPixmap:
 class CropApp(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.preprocessor = IDCardPreprocessor()
+        self.scanner = ImageScanExtractor()
         self._ocr: OCREngine | None = None
         self.parser = IDCardParser()
 
@@ -137,7 +140,7 @@ class CropApp(QWidget):
             if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
                 skipped += 1
                 continue
-            image = cv2.imread(path)
+            image = self.scanner.load_image(path)
             if image is None:
                 skipped += 1
                 continue
@@ -188,12 +191,12 @@ class CropApp(QWidget):
             if polygon is None:
                 self._set_status("已取消裁剪")
                 return
-            processed, _ = self.preprocessor.preprocess(
-                image, bbox=polygon, show_process=False, scan_style=False
+            processed, _ = self.scanner.extract(
+                image, roi=polygon, show_process=False, scan_style=False
             )
         else:
-            processed, _ = self.preprocessor.preprocess(
-                image, bbox=None, show_process=False, scan_style=False
+            processed, _ = self.scanner.extract(
+                image, roi=None, show_process=False, scan_style=False
             )
 
         if processed is None:

@@ -4,7 +4,7 @@
 支持单张处理和批量处理，使用 argparse 提供 CLI 接口。
 
 处理流程:
-    manual crop(Qt6) → preprocess(OpenCV) → OCR(PaddleOCR) → parse → validate → PDF
+    manual crop(Qt6) → scan extract(OpenCV) → OCR(RapidOCR) → parse → validate → PDF
 """
 import argparse
 import logging
@@ -12,14 +12,17 @@ import os
 import sys
 import time
 
+from ocr_engine import OCREngine, preload_onnxruntime
+
+preload_onnxruntime()
+
 import cv2
 
 import config
 from config import setup_logging
-from ocr_engine import OCREngine
+from image_scan_extractor import ImageScanExtractor
 from parser import IDCardParser
 from pdf_generator import PDFGenerator
-from preprocess import IDCardPreprocessor
 from validator import IDCardValidator
 
 logger = logging.getLogger(__name__)
@@ -38,7 +41,7 @@ def _select_manual_roi(image):
 def process_single(
     image_path: str,
     output_dir: str,
-    preprocessor: IDCardPreprocessor,
+    scanner: ImageScanExtractor,
     ocr: OCREngine,
     parser: IDCardParser,
     show_process: bool = False,
@@ -50,7 +53,7 @@ def process_single(
     Args:
         image_path: 图片路径
         output_dir: 输出目录
-        preprocessor: 图像预处理器
+        scanner: 图像扫描提取器
         ocr: OCR 引擎
         parser: 字段解析器
         show_process: 是否显示处理过程
@@ -63,12 +66,9 @@ def process_single(
     start_time = time.time()
 
     # 1. 加载图像
-    image = cv2.imread(image_path)
+    image = scanner.load_image(image_path)
     if image is None:
-        logger.error("无法加载图片: %s", image_path)
         return None
-
-    logger.info("图像加载完成: %dx%d", image.shape[1], image.shape[0])
 
     # 2. 强制手动裁剪
     try:
@@ -85,9 +85,9 @@ def process_single(
     basename = os.path.splitext(os.path.basename(image_path))[0]
     scan_output_path = os.path.join(output_dir, f"{basename}_scan.jpg") if scan_style else None
 
-    processed, scan_image = preprocessor.preprocess(
+    processed, scan_image = scanner.extract(
         image,
-        bbox=bbox,
+        roi=bbox,
         show_process=show_process,
         scan_style=scan_style,
         scan_output_path=scan_output_path,
@@ -143,7 +143,7 @@ def process_single(
 def process_batch(
     input_dir: str,
     output_dir: str,
-    preprocessor: IDCardPreprocessor,
+    scanner: ImageScanExtractor,
     ocr: OCREngine,
     parser: IDCardParser,
     show_process: bool = False,
@@ -155,7 +155,7 @@ def process_batch(
     Args:
         input_dir: 输入目录
         output_dir: 输出目录
-        preprocessor: 图像预处理器
+        scanner: 图像扫描提取器
         ocr: OCR 引擎
         parser: 字段解析器
         show_process: 是否显示处理过程
@@ -182,7 +182,7 @@ def process_batch(
         result = process_single(
             img_path,
             output_dir,
-            preprocessor,
+            scanner,
             ocr,
             parser,
             show_process,
@@ -239,7 +239,6 @@ def build_parser() -> argparse.ArgumentParser:
     # 其他参数
     ap.add_argument("--show", action="store_true", help="显示处理过程中的图像")
     ap.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default=None, help="日志级别")
-    ap.add_argument("--no-gpu", action="store_true", help="禁用 GPU")
     ap.add_argument("--scan-style", action="store_true", help="输出扫描风格图（可能偏亮）")
 
     return ap
@@ -270,8 +269,8 @@ def main():
 
     # 初始化各模块
     logger.info("初始化处理模块...")
-    preprocessor = IDCardPreprocessor()
-    ocr = OCREngine(use_gpu=False if args.no_gpu else None)
+    scanner = ImageScanExtractor()
+    ocr = OCREngine()
     parser = IDCardParser()
 
     if args.input:
@@ -283,7 +282,7 @@ def main():
         result = process_single(
             args.input,
             args.output_dir,
-            preprocessor,
+            scanner,
             ocr,
             parser,
             show_process=args.show,
@@ -304,7 +303,7 @@ def main():
         results = process_batch(
             args.input_dir,
             args.output_dir,
-            preprocessor,
+            scanner,
             ocr,
             parser,
             show_process=args.show,

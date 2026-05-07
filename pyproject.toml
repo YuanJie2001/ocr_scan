@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "ocrid"
 version = "0.2.0"
 description = "A high-performance OCR tool for ID card photo to electronic PDF."
@@ -8,26 +8,11 @@ dependencies = [
     "numpy>=2.2.3",
     "opencv-python>=4.5.0",
     "reportlab>=4.4.7",
-    "paddleocr>=2.7.0,<3.0.0",
+    "rapidocr>=3.0.0,<3.8.0",
+    "onnxruntime>=1.17.0",
     "albumentations==1.3.1",
     "setuptools>=82.0.1",
     "PyQt6>=6.6.0",
-]
-
-[project.optional-dependencies]
-cpu = [
-  "paddlepaddle>=2.5.0,<3.0.0",
-]
-cu128 = [
-  "paddlepaddle-gpu>=2.5.0,<3.0.0",
-]
-
-[tool.uv]
-conflicts = [
-  [
-    { extra = "cpu" },
-    { extra = "cu128" },
-  ],
 ]
 
 
